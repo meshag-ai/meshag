@@ -1,0 +1,77 @@
+# Pre-commit configuration for Rust project
+repos:
+  # Rust-specific hooks
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: Rust fmt
+        description: Format Rust code with rustfmt
+        entry: cargo fmt
+        language: system
+        files: \.rs$
+        args: ['--all', '--', '--check']
+
+      - id: clippy
+        name: Rust clippy
+        description: Lint Rust code with clippy
+        entry: cargo clippy
+        language: system
+        files: \.rs$
+        args: ['--all-targets', '--all-features', '--workspace', '--', '-D', 'warnings']
+
+      - id: cargo-check
+        name: Cargo check
+        description: Check Rust code compiles
+        entry: cargo check
+        language: system
+        files: \.rs$
+        args: ['--all-targets', '--all-features', '--workspace']
+
+  # General hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+        name: Trim trailing whitespace
+
+      - id: end-of-file-fixer
+        name: Fix end of files
+
+      - id: check-merge-conflict
+        name: Check for merge conflicts
+
+      - id: check-added-large-files
+        name: Check for large files
+        args: ['--maxkb=1000']
+
+      - id: check-yaml
+        name: Check YAML syntax
+        files: \.(yaml|yml)$
+
+      - id: check-toml
+        name: Check TOML syntax
+        files: \.toml$
+
+  # Security audit
+  - repo: local
+    hooks:
+      - id: cargo-audit
+        name: Cargo audit
+        description: Check for security vulnerabilities
+        entry: cargo audit
+        language: system
+        files: Cargo\.(toml|lock)$
+        pass_filenames: false
+
+  # Tests (optional - can be slow)
+  - repo: local
+    hooks:
+      - id: cargo-test
+        name: Cargo test
+        description: Run tests
+        entry: cargo test
+        language: system
+        files: \.rs$
+        pass_filenames: false
+        args: ['--all-features', '--workspace']
