@@ -189,26 +189,6 @@ open http://localhost:3000  # Grafana (admin/admin)
 - **Transport Service**: 8084
 - **NATS**: 4222 (client), 8222 (monitoring)
 
-## 🚀 Production Deployment
-
-### Docker Compose
-```bash
-# Production deployment
-cd docker
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-```
-
-### Kubernetes
-```bash
-# Generate Kubernetes manifests
-kubectl apply -f k8s/
-```
-
-### Scaling
-```bash
-# Horizontal scaling of AI agents
-docker-compose up -d --scale stt-service=3 --scale llm-service=2
-```
 
 ## 📚 Documentation
 
