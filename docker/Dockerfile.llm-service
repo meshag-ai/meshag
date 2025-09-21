@@ -1,0 +1,26 @@
+# Build stage
+FROM rust:1.75 AS builder
+
+WORKDIR /app
+
+# Copy workspace files
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+COPY services/llm-service/ services/llm-service/
+
+# Build the service
+RUN cargo build --release --bin llm-service
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the binary
+COPY --from=builder /app/target/release/llm-service /usr/local/bin/llm-service
+
+# Set the binary as entrypoint
+ENTRYPOINT ["/usr/local/bin/llm-service"]

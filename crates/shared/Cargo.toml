@@ -1,0 +1,21 @@
+[package]
+name = "meshag-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Shared types, queue management, and utilities for Meshag services"
+
+[dependencies]
+# Use workspace dependencies
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+async-nats = { workspace = true }
+futures = "0.3"
+
+[lints]
+workspace = true

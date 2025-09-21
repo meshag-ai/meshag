@@ -1,0 +1,17 @@
+[package]
+name = "meshag-service-common"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+prometheus = { version = "0.13", features = ["process"] }
+once_cell = "1.19"
+serde = { workspace = true }
+serde_json = { workspace = true }
+meshag-shared = { path = "../shared" }
+async-trait = "0.1"
