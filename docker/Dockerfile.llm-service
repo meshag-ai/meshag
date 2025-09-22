@@ -1,15 +1,20 @@
-# Build stage
-FROM rust:1.75 AS builder
+# Multi-stage build for LLM Service
+FROM rustlang/rust:nightly-bookworm AS builder
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
 WORKDIR /app
 
-# Copy workspace files
-COPY Cargo.toml Cargo.lock ./
-COPY crates/ crates/
-COPY services/llm-service/ services/llm-service/
+# Copy entire source code
+COPY . .
 
-# Build the service
-RUN cargo build --release --bin llm-service
+# Build the LLM service
+RUN cargo build --release -p llm-service
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -17,10 +22,26 @@ FROM debian:bookworm-slim
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the binary
-COPY --from=builder /app/target/release/llm-service /usr/local/bin/llm-service
+# Create non-root user
+RUN useradd -r -u 1000 -m -s /bin/false appuser
 
-# Set the binary as entrypoint
-ENTRYPOINT ["/usr/local/bin/llm-service"]
+# Copy binary
+COPY --from=builder /app/target/release/llm-service /usr/local/bin/llm-service
+RUN chmod +x /usr/local/bin/llm-service
+
+# Switch to non-root user
+USER appuser
+
+# Expose port
+EXPOSE 8082
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8082/health || exit 1
+
+# Run the service
+CMD ["/usr/local/bin/llm-service"]

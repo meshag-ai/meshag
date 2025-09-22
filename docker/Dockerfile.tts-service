@@ -1,15 +1,20 @@
-# Build stage
-FROM rust:1.75 AS builder
+# Multi-stage build for TTS Service
+FROM rustlang/rust:nightly-bookworm AS builder
 
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
 WORKDIR /app
 
-# Copy workspace files
-COPY Cargo.toml Cargo.lock ./
-COPY crates/ crates/
-COPY services/tts-service/ services/tts-service/
+# Copy entire source code
+COPY . .
 
-# Build the service
-RUN cargo build --release --bin tts-service
+# Build the TTS service
+RUN cargo build --release -p tts-service
 
 # Runtime stage
 FROM debian:bookworm-slim
@@ -17,10 +22,26 @@ FROM debian:bookworm-slim
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
+    libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the binary
-COPY --from=builder /app/target/release/tts-service /usr/local/bin/tts-service
+# Create non-root user
+RUN useradd -r -u 1000 -m -s /bin/false appuser
 
-# Set the binary as entrypoint
-ENTRYPOINT ["/usr/local/bin/tts-service"]
+# Copy binary
+COPY --from=builder /app/target/release/tts-service /usr/local/bin/tts-service
+RUN chmod +x /usr/local/bin/tts-service
+
+# Switch to non-root user
+USER appuser
+
+# Expose port
+EXPOSE 8083
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8083/health || exit 1
+
+# Run the service
+CMD ["/usr/local/bin/tts-service"]

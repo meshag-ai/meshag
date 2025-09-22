@@ -5,7 +5,7 @@ use meshag_connectors::{
     Daily, DailyConfig, ParticipantConfig, RoomConfig, SessionInfo, TransportConnector,
     TransportRequest, TransportResponse,
 };
-use meshag_service_common::handlers::ServiceState;
+use meshag_service_common::{HealthCheck, ServiceState};
 use meshag_shared::EventQueue;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -149,12 +149,12 @@ impl ServiceState for TransportServiceState {
         "transport-service".to_string()
     }
 
-    async fn is_ready(&self) -> Vec<meshag_service_common::types::HealthCheck> {
+    async fn is_ready(&self) -> Vec<HealthCheck> {
         let mut checks = vec![];
 
         // Check NATS connection
         let nats_healthy = self.event_queue.health_check().await.unwrap_or(false);
-        checks.push(meshag_service_common::types::HealthCheck {
+        checks.push(HealthCheck {
             name: "nats".to_string(),
             status: if nats_healthy {
                 "healthy".to_string()
@@ -177,7 +177,7 @@ impl ServiceState for TransportServiceState {
         for connector_name in connector_names {
             if let Some(connector) = self.connectors.get(&connector_name) {
                 let healthy = connector.health_check().await.unwrap_or(false);
-                checks.push(meshag_service_common::types::HealthCheck {
+                checks.push(HealthCheck {
                     name: format!("connector_{}", connector_name),
                     status: if healthy {
                         "healthy".to_string()

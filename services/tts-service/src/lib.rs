@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use meshag_connectors::{TtsConnector, TtsRequest};
-use meshag_service_common::handlers::ServiceState;
+use meshag_service_common::{HealthCheck, ServiceState};
 use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
 use serde_json::json;
 use std::collections::HashMap;
@@ -183,12 +183,12 @@ impl ServiceState for TtsServiceState {
         "tts-service".to_string()
     }
 
-    async fn is_ready(&self) -> Vec<meshag_service_common::types::HealthCheck> {
+    async fn is_ready(&self) -> Vec<HealthCheck> {
         let mut checks = vec![];
 
         // Check NATS connection
         let nats_healthy = self.event_queue.health_check().await.unwrap_or(false);
-        checks.push(meshag_service_common::types::HealthCheck {
+        checks.push(HealthCheck {
             name: "nats".to_string(),
             status: if nats_healthy {
                 "healthy".to_string()
@@ -205,7 +205,7 @@ impl ServiceState for TtsServiceState {
         // Check connectors
         let connector_health = self.tts_service.health_check_connectors().await;
         for (name, healthy) in connector_health {
-            checks.push(meshag_service_common::types::HealthCheck {
+            checks.push(HealthCheck {
                 name: format!("connector_{}", name),
                 status: if healthy {
                     "healthy".to_string()

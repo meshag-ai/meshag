@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  # NATS JetStream for ultra-high-performance event streaming
+  # NATS JetStream - High-performance message streaming
   nats:
     image: nats:2.10-alpine
     container_name: meshag-nats
@@ -21,23 +19,27 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
     networks:
       - meshag-network
 
-  # Generic STT Service with Whisper Connector
+  # STT Service - Speech-to-Text with configurable providers
   stt-service:
     build:
-      context: .
-      dockerfile: Dockerfile.stt-service
+      context: ..
+      dockerfile: docker/Dockerfile.stt-service
     container_name: meshag-stt-service
     ports:
       - "8081:8081"
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=${RUST_LOG:-info}
       - PORT=8081
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-api-key-here}
-      - OPENAI_BASE_URL=https://api.openai.com/v1
       - NATS_URL=nats://nats:4222
+      # OpenAI Whisper (Default)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Deepgram (Optional)
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
     depends_on:
       nats:
         condition: service_healthy
@@ -47,24 +49,27 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: unless-stopped
     networks:
       - meshag-network
-    restart: unless-stopped
 
-  # Generic LLM Service with OpenAI Connector
+  # LLM Service - Language Model with configurable providers
   llm-service:
     build:
-      context: .
-      dockerfile: Dockerfile.llm-service
+      context: ..
+      dockerfile: docker/Dockerfile.llm-service
     container_name: meshag-llm-service
     ports:
       - "8082:8082"
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=${RUST_LOG:-info}
       - PORT=8082
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-api-key-here}
-      - OPENAI_BASE_URL=https://api.openai.com/v1
       - NATS_URL=nats://nats:4222
+      # OpenAI GPT (Default)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      # Anthropic Claude (Optional)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     depends_on:
       nats:
         condition: service_healthy
@@ -74,26 +79,27 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: unless-stopped
     networks:
       - meshag-network
-    restart: unless-stopped
 
-  # Generic TTS Service
+  # TTS Service - Text-to-Speech with configurable providers
   tts-service:
     build:
-      context: .
-      dockerfile: Dockerfile.tts-service
+      context: ..
+      dockerfile: docker/Dockerfile.tts-service
     container_name: meshag-tts-service
     ports:
       - "8083:8083"
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=${RUST_LOG:-info}
       - PORT=8083
-      # Add TTS provider API keys as needed
-      # - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
-      # - AZURE_API_KEY=${AZURE_API_KEY}
-      # - AZURE_REGION=${AZURE_REGION}
       - NATS_URL=nats://nats:4222
+      # ElevenLabs (Default)
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
+      # Azure Speech (Optional)
+      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
+      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-}
     depends_on:
       nats:
         condition: service_healthy
@@ -103,24 +109,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: unless-stopped
     networks:
       - meshag-network
-    restart: unless-stopped
 
-  # Transport Service with Daily.co Integration
+  # Transport Service - WebRTC transport with Daily.co
   transport-service:
     build:
-      context: .
-      dockerfile: Dockerfile.transport-service
+      context: ..
+      dockerfile: docker/Dockerfile.transport-service
     container_name: meshag-transport-service
     ports:
       - "8084:8084"
     environment:
-      - RUST_LOG=info
+      - RUST_LOG=${RUST_LOG:-info}
       - PORT=8084
       - NATS_URL=nats://nats:4222
-      - DAILY_API_KEY=${DAILY_API_KEY:-your-daily-api-key-here}
-      - DAILY_DOMAIN=${DAILY_DOMAIN:-your-daily-domain-here}
+      # Daily.co Configuration (Required)
+      - DAILY_API_KEY=${DAILY_API_KEY}
+      - DAILY_DOMAIN=${DAILY_DOMAIN}
     depends_on:
       nats:
         condition: service_healthy
@@ -130,69 +137,18 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    networks:
-      - meshag-network
     restart: unless-stopped
-
-  # Valkey Commander (Optional - Web UI for Valkey)
-  valkey-commander:
-    image: rediscommander/redis-commander:latest
-    container_name: meshag-valkey-commander
-    ports:
-      - "8082:8081"
-    environment:
-      - REDIS_HOSTS=local:valkey:6379
-    depends_on:
-      - valkey
     networks:
       - meshag-network
-    profiles:
-      - tools
 
-  # Prometheus (Optional - Metrics collection)
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: meshag-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
-    networks:
-      - meshag-network
-    profiles:
-      - monitoring
-
-  # Grafana (Optional - Metrics visualization)
-  grafana:
-    image: grafana/grafana:latest
-    container_name: meshag-grafana
-    ports:
-      - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    volumes:
-      - grafana_data:/var/lib/grafana
-    depends_on:
-      - prometheus
-    networks:
-      - meshag-network
-    profiles:
-      - monitoring
-
-volumes:
-  nats_data:
-  prometheus_data:
-  grafana_data:
-
-
+# Networks
 networks:
   meshag-network:
     driver: bridge
+    name: meshag-network
+
+# Volumes
+volumes:
+  nats_data:
+    driver: local
+    name: meshag-nats-data
