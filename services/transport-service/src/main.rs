@@ -6,15 +6,36 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use meshag_orchestrator::AgentConfig;
 use meshag_transport_service::{
     CreateSessionRequest, TransportServiceConfig, TransportServiceState, WebSocketConnection,
     WebSocketMessage,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
+
+/// Request to create a session with configuration
+#[derive(Debug, Deserialize)]
+struct CreateSessionWithConfigRequest {
+    pub config: AgentConfig,
+    pub session_name: Option<String>,
+    pub max_participants: Option<u32>,
+    pub enable_recording: Option<bool>,
+    pub enable_transcription: Option<bool>,
+}
+
+/// Response for session creation with config
+#[derive(Debug, Serialize)]
+struct CreateSessionWithConfigResponse {
+    pub session_id: String,
+    pub room_url: String,
+    pub token: String,
+    pub config_stored: bool,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -59,6 +80,7 @@ fn create_app_router(state: Arc<TransportServiceState>) -> Router {
         .route("/ws", get(websocket_handler))
         // Session management endpoints
         .route("/sessions", post(create_session))
+        .route("/sessions/with-config", post(create_session_with_config))
         .route("/sessions", get(list_sessions))
         .route("/sessions/:session_id", get(get_session))
         .route("/sessions/:session_id", delete(end_session))
@@ -254,4 +276,75 @@ where
     fn from(err: E) -> Self {
         Self(err.into())
     }
+}
+
+/// Create a session with configuration
+async fn create_session_with_config(
+    State(state): State<Arc<TransportServiceState>>,
+    Json(request): Json<CreateSessionWithConfigRequest>,
+) -> Result<Json<CreateSessionWithConfigResponse>, AppError> {
+    // Validate the configuration
+    request.config.validate().map_err(AppError::from)?;
+
+    // Create the session
+    let session_request = CreateSessionRequest {
+        provider: "daily".to_string(),
+        room_config: meshag_connectors::RoomConfig {
+            name: request.session_name,
+            privacy: meshag_connectors::RoomPrivacy::Public,
+            max_participants: request.max_participants,
+            enable_recording: request.enable_recording.unwrap_or(true),
+            enable_transcription: request.enable_transcription.unwrap_or(true),
+            enable_chat: true,
+        },
+        participant_config: meshag_connectors::ParticipantConfig {
+            name: Some("agent".to_string()),
+            is_owner: true,
+            permissions: meshag_connectors::ParticipantPermissions {
+                can_admin: true,
+                can_send_video: true,
+                can_send_audio: true,
+                can_send_screen_video: false,
+                can_send_screen_audio: false,
+            },
+        },
+        options: std::collections::HashMap::new(),
+    };
+
+    let session_response = state.create_session(session_request).await?;
+
+    // Store the configuration in Valkey
+    let config_stored = state
+        .store_config(&session_response.session_id, &request.config)
+        .await
+        .is_ok();
+
+    if !config_stored {
+        error!(
+            "Failed to store configuration for session: {}",
+            session_response.session_id
+        );
+    }
+
+    // Automatically join the AI agent to the session and start processing
+    if let Err(e) = state
+        .join_as_ai_agent(&session_response.session_id, "AI Agent")
+        .await
+    {
+        error!("Failed to join AI agent to session: {}", e);
+    }
+
+    let response = CreateSessionWithConfigResponse {
+        session_id: session_response.session_id,
+        room_url: session_response.room_url,
+        token: session_response.meeting_token.unwrap_or_default(),
+        config_stored,
+    };
+
+    info!(
+        "Created session {} with config stored: {}",
+        response.session_id, config_stored
+    );
+
+    Ok(Json(response))
 }

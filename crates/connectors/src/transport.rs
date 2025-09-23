@@ -29,8 +29,6 @@ pub struct RoomConfig {
     pub enable_recording: bool,
     pub enable_transcription: bool,
     pub enable_chat: bool,
-    pub auto_start_recording: bool,
-    pub auto_start_transcription: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +86,9 @@ pub struct ParticipantInfo {
 pub trait TransportConnector: Send + Sync {
     /// Unique identifier for this connector
     fn provider_name(&self) -> &'static str;
+
+    /// Get a reference to the underlying type for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
 
     /// Check if the connector is healthy and ready to process requests
     async fn health_check(&self) -> Result<bool>;

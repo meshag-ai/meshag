@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use meshag_connectors::{AudioFormat, SttConnector, SttRequest};
+use meshag_orchestrator::ServiceRouter;
 use meshag_service_common::{HealthCheck, ServiceState};
 use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
 use serde_json::json;
@@ -12,6 +13,7 @@ use tracing::{error, info, warn};
 pub struct SttService {
     connectors: Arc<RwLock<HashMap<String, Arc<dyn SttConnector>>>>,
     default_connector: Arc<RwLock<Option<String>>>,
+    router: Arc<RwLock<Option<ServiceRouter>>>,
 }
 
 impl SttService {
@@ -19,6 +21,7 @@ impl SttService {
         Self {
             connectors: Arc::new(RwLock::new(HashMap::new())),
             default_connector: Arc::new(RwLock::new(None)),
+            router: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -93,6 +96,7 @@ impl Clone for SttService {
         Self {
             connectors: Arc::clone(&self.connectors),
             default_connector: Arc::clone(&self.default_connector),
+            router: Arc::clone(&self.router),
         }
     }
 }
