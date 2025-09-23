@@ -17,6 +17,7 @@ chrono = { workspace = true }
 meshag-shared = { path = "../../crates/shared" }
 meshag-connectors = { path = "../../crates/connectors" }
 meshag-service-common = { path = "../../crates/service-common" }
+meshag-orchestrator = { path = "../../crates/orchestrator" }
 
 # Service-specific dependencies
 tracing-subscriber = "0.3"

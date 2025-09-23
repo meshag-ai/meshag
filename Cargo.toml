@@ -3,6 +3,7 @@ members = [
     "crates/shared",
     "crates/service-common",
     "crates/connectors",
+    "crates/orchestrator",
     "services/stt-service",
     "services/llm-service",
     "services/tts-service",

@@ -69,8 +69,6 @@ impl DailyTransportConnector {
             "enable_screenshare": true,
             "enable_recording": if room_config.enable_recording { "cloud" } else { "off" },
             "enable_transcription": room_config.enable_transcription,
-            "auto_start_recording": room_config.auto_start_recording,
-            "auto_start_transcription": room_config.auto_start_transcription,
         });
 
         if let Some(max_participants) = room_config.max_participants {
@@ -101,7 +99,7 @@ impl DailyTransportConnector {
         Ok(room_data)
     }
 
-    async fn create_meeting_token(
+    pub async fn create_meeting_token(
         &self,
         room_name: &str,
         participant_config: &ParticipantConfig,
@@ -218,6 +216,10 @@ impl DailyTransportConnector {
 impl TransportConnector for DailyTransportConnector {
     fn provider_name(&self) -> &'static str {
         "daily"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
     async fn health_check(&self) -> Result<bool> {

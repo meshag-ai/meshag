@@ -23,6 +23,25 @@ services:
     networks:
       - meshag-network
 
+  # Valkey - Redis-compatible key-value store for configuration
+  valkey:
+    image: valkey/valkey:7.2-alpine
+    container_name: meshag-valkey
+    ports:
+      - "6379:6379"
+    volumes:
+      - valkey_data:/data
+    command: valkey-server --appendonly yes
+    healthcheck:
+      test: [ "CMD", "valkey-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - meshag-network
+
   # STT Service - Speech-to-Text with configurable providers
   stt-service:
     build:
@@ -35,6 +54,7 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
       - PORT=8081
       - NATS_URL=nats://nats:4222
+      - VALKEY_URL=redis://valkey:6379
       # OpenAI Whisper (Default)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -42,6 +62,8 @@ services:
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
     depends_on:
       nats:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8081/health" ]
@@ -65,6 +87,7 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
       - PORT=8082
       - NATS_URL=nats://nats:4222
+      - VALKEY_URL=redis://valkey:6379
       # OpenAI GPT (Default)
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
@@ -72,6 +95,8 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     depends_on:
       nats:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8082/health" ]
@@ -95,6 +120,7 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
       - PORT=8083
       - NATS_URL=nats://nats:4222
+      - VALKEY_URL=redis://valkey:6379
       # ElevenLabs (Default)
       - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
       # Azure Speech (Optional)
@@ -102,6 +128,8 @@ services:
       - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-}
     depends_on:
       nats:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8083/health" ]
@@ -125,11 +153,14 @@ services:
       - RUST_LOG=${RUST_LOG:-info}
       - PORT=8084
       - NATS_URL=nats://nats:4222
+      - VALKEY_URL=redis://valkey:6379
       # Daily.co Configuration (Required)
-      - DAILY_API_KEY=${DAILY_API_KEY}
-      - DAILY_DOMAIN=${DAILY_DOMAIN}
+      - DAILY_API_KEY=${DAILY_API_KEY:-}
+      - DAILY_DOMAIN=${DAILY_DOMAIN:-}
     depends_on:
       nats:
+        condition: service_healthy
+      valkey:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8084/health" ]
@@ -151,4 +182,5 @@ networks:
 volumes:
   nats_data:
     driver: local
-    name: meshag-nats-data
+  valkey_data:
+    driver: local

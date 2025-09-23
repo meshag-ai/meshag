@@ -1,0 +1,18 @@
+[package]
+name = "meshag-orchestrator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+async-trait = "0.1"
+reqwest = { version = "0.11", features = ["json"] }
+meshag-shared = { path = "../shared" }
+meshag-connectors = { path = "../connectors" }
+chrono = { version = "0.4", features = ["serde"] }
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
