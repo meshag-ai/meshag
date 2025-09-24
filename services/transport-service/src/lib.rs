@@ -21,6 +21,7 @@ pub struct TransportServiceConfig {
     pub daily_api_key: String,
     pub daily_domain: String,
     pub nats_url: String,
+    pub valkey_url: String,
 }
 
 impl TransportServiceConfig {
@@ -32,16 +33,20 @@ impl TransportServiceConfig {
                 .map_err(|_| anyhow::anyhow!("DAILY_DOMAIN environment variable not set"))?,
             nats_url: std::env::var("NATS_URL")
                 .unwrap_or_else(|_| "nats://localhost:4222".to_string()),
+            valkey_url: std::env::var("VALKEY_URL")
+                .unwrap_or_else(|_| "redis://localhost:6379".to_string()),
         })
     }
 }
 
 /// Transport service state
+#[derive(Clone)]
 pub struct TransportServiceState {
     pub config: TransportServiceConfig,
     pub event_queue: Arc<EventQueue>,
     pub connectors: DashMap<String, Arc<dyn TransportConnector>>,
     pub sessions: DashMap<String, SessionInfo>,
+    pub session_providers: DashMap<String, String>, // Maps session_id -> provider_name
     pub config_storage: Arc<ConfigStorage>,
     pub daily_domain: String,
 }
@@ -53,7 +58,17 @@ impl TransportServiceState {
         let sessions = DashMap::new();
         let valkey_url =
             std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
-        let config_storage = Arc::new(ConfigStorage::new(&valkey_url).await?);
+
+        tracing::info!("Connecting to Valkey at: {}", valkey_url);
+        let config_storage = Arc::new(
+            ConfigStorage::new(&valkey_url)
+                .await
+                .map_err(|e| {
+                    tracing::error!("Failed to connect to Valkey at '{}': {}", valkey_url, e);
+                    anyhow::anyhow!("Valkey connection failed: {}", e)
+                })?
+        );
+        tracing::info!("Successfully connected to Valkey");
 
         // Register Daily.co connector
         let daily_config =
@@ -69,6 +84,7 @@ impl TransportServiceState {
             event_queue,
             connectors,
             sessions,
+            session_providers: DashMap::new(),
             config_storage,
             daily_domain,
         }))
@@ -105,7 +121,10 @@ impl TransportServiceState {
             updated_at: chrono::Utc::now(),
         };
 
-        self.sessions.insert(session_id, session_info);
+        self.sessions.insert(session_id.clone(), session_info);
+
+        // Store the provider mapping for this session
+        self.session_providers.insert(session_id, request.provider.clone());
 
         Ok(response)
     }
@@ -134,7 +153,16 @@ impl TransportServiceState {
                 connector.end_session(session_id).await?;
             }
         }
+
+        // Clean up session data
         self.sessions.remove(session_id);
+        self.session_providers.remove(session_id);
+
+        // Also clean up any stored configuration for this session
+        if let Err(e) = self.delete_config(session_id).await {
+            tracing::warn!("Failed to delete config for session {}: {}", session_id, e);
+        }
+
         Ok(())
     }
 
@@ -195,7 +223,7 @@ impl TransportServiceState {
 
         // Create orchestrator router for this session
         let mut router = meshag_orchestrator::ServiceRouter::new(
-            &self.config.nats_url,
+            &self.config.valkey_url,
             (*self.event_queue).clone(),
             "transport".to_string(),
         )
@@ -250,8 +278,8 @@ impl TransportServiceState {
     async fn handle_daily_audio_input(
         &self,
         session_id: &str,
-        agent_token: &str,
-        event_queue: &meshag_shared::EventQueue,
+        _agent_token: &str,
+        _event_queue: &meshag_shared::EventQueue,
         router: &meshag_orchestrator::ServiceRouter,
     ) -> Result<()> {
         tracing::info!(
@@ -313,7 +341,7 @@ impl TransportServiceState {
         session_id: &str,
         agent_token: &str,
         event_queue: &meshag_shared::EventQueue,
-        router: &meshag_orchestrator::ServiceRouter,
+        _router: &meshag_orchestrator::ServiceRouter,
     ) -> Result<()> {
         tracing::info!(
             "AI agent listening for TTS output for session: {}",
@@ -322,60 +350,67 @@ impl TransportServiceState {
 
         // Listen to NATS stream for TTS output
         let stream_config = meshag_shared::StreamConfig {
-            name: "transport.audio".to_string(),
-            subjects: vec!["transport.audio".to_string()],
+            name: "tts-output".to_string(),
+            subjects: vec!["tts-output".to_string()],
             max_messages: 10000,
             max_bytes: 1024 * 1024 * 100, // 100MB
             max_age: std::time::Duration::from_secs(3600),
         };
 
-        let mut consumer = event_queue
-            .create_consumer(stream_config, "transport.audio".to_string())
+        let consumer = event_queue
+            .create_consumer(stream_config, "tts-output".to_string())
             .await?;
 
         // Use batch method to consume messages
         loop {
-            match consumer.batch().max_messages(10).await {
-                Ok(messages) => {
-                    for message in messages {
-                        if let Ok(payload) = serde_json::from_slice::<meshag_shared::ProcessingEvent>(
-                            &message.payload,
-                        ) {
-                            // Check if this event is for our session
-                            if payload.conversation_id.to_string() == session_id {
-                                tracing::debug!("Received TTS audio for session: {}", session_id);
+            match consumer.batch().max_messages(10).messages().await {
+                Ok(mut messages) => {
+                    while let Some(message_result) = messages.next().await {
+                        match message_result {
+                            Ok(message) => {
+                                if let Ok(payload) = serde_json::from_slice::<meshag_shared::ProcessingEvent>(
+                                    &message.payload,
+                                ) {
+                                    // Check if this event is for our session
+                                    if payload.conversation_id.to_string() == session_id {
+                                        tracing::debug!("Received TTS audio for session: {}", session_id);
 
-                                // Extract audio data from the event
-                                if let Some(audio_data_b64) = payload.payload.get("audio_data") {
-                                    if let Some(audio_data_str) = audio_data_b64.as_str() {
-                                        if let Ok(audio_data) =
-                                            general_purpose::STANDARD.decode(audio_data_str)
-                                        {
-                                            // Send audio data to Daily.co room using agent token
-                                            if let Err(e) = self
-                                                .send_audio_to_daily(
-                                                    session_id,
-                                                    agent_token,
-                                                    &audio_data,
-                                                )
-                                                .await
-                                            {
-                                                tracing::error!(
-                                                    "Failed to send audio to Daily.co: {}",
-                                                    e
-                                                );
-                                            } else {
-                                                tracing::debug!("Sent audio data to Daily.co room");
+                                        // Extract audio data from the event
+                                        if let Some(audio_data_b64) = payload.payload.get("audio_data") {
+                                            if let Some(audio_data_str) = audio_data_b64.as_str() {
+                                                if let Ok(audio_data) =
+                                                    general_purpose::STANDARD.decode(audio_data_str)
+                                                {
+                                                    // Send audio data to Daily.co room using agent token
+                                                    if let Err(e) = self
+                                                        .send_audio_to_daily(
+                                                            session_id,
+                                                            agent_token,
+                                                            &audio_data,
+                                                        )
+                                                    .await
+                                                    {
+                                                        tracing::error!(
+                                                            "Failed to send audio to Daily.co: {}",
+                                                            e
+                                                        );
+                                                    } else {
+                                                        tracing::debug!("Sent audio data to Daily.co room");
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }
 
-                        // Acknowledge the message
-                        if let Err(e) = message.ack().await {
-                            tracing::error!("Failed to acknowledge message: {}", e);
+                                // Acknowledge the message
+                                if let Err(e) = message.ack().await {
+                                    tracing::error!("Failed to acknowledge message: {}", e);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Error receiving message: {}", e);
+                            }
                         }
                     }
                 }
@@ -393,12 +428,12 @@ impl TransportServiceState {
     async fn send_audio_to_daily(
         &self,
         session_id: &str,
-        agent_token: &str,
+        _agent_token: &str,
         audio_data: &[u8],
     ) -> Result<()> {
         // Connect to Daily.co WebSocket to send audio
         let ws_url = format!("wss://{}.daily.co/{}", self.daily_domain, session_id);
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
+        let (mut ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
 
         // Send audio data as binary message
         ws_stream.send(Message::Binary(audio_data.to_vec())).await?;
@@ -415,7 +450,7 @@ impl TransportServiceState {
     async fn send_ai_greeting(
         &self,
         session_id: &str,
-        agent_token: &str,
+        _agent_token: &str,
         router: &meshag_orchestrator::ServiceRouter,
     ) -> Result<()> {
         tracing::info!("AI agent sending greeting for session: {}", session_id);
@@ -446,10 +481,16 @@ impl TransportServiceState {
         Ok(sessions)
     }
 
-    fn get_provider_for_session(&self, _session_id: &str) -> Option<String> {
-        // In a real implementation, you'd store the provider mapping
-        // For now, assume Daily.co
-        Some("daily".to_string())
+    fn get_provider_for_session(&self, session_id: &str) -> Option<String> {
+        // Look up the provider for this session
+        if let Some(provider) = self.session_providers.get(session_id) {
+            Some(provider.clone())
+        } else {
+            // If session not found in cache, assume Daily.co as default
+            // This handles cases where sessions might have been created before
+            // the provider mapping was implemented
+            Some("daily".to_string())
+        }
     }
 
     /// Store configuration for a session
@@ -475,6 +516,67 @@ impl TransportServiceState {
     /// Check if configuration exists for a session
     pub async fn config_exists(&self, session_id: &str) -> Result<bool> {
         self.config_storage.config_exists(session_id).await
+    }
+
+    /// Get session statistics
+    pub fn get_session_stats(&self) -> SessionStats {
+        let total_sessions = self.sessions.len();
+        let active_sessions = self
+            .sessions
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.value().status,
+                    meshag_connectors::SessionStatus::Created | meshag_connectors::SessionStatus::Active
+                )
+            })
+            .count();
+
+        let mut provider_counts = std::collections::HashMap::new();
+        for provider_entry in self.session_providers.iter() {
+            *provider_counts.entry(provider_entry.value().clone()).or_insert(0) += 1;
+        }
+
+        SessionStats {
+            total_sessions,
+            active_sessions,
+            provider_counts,
+        }
+    }
+
+    /// Check if a session exists
+    pub fn session_exists(&self, session_id: &str) -> bool {
+        self.sessions.contains_key(session_id)
+    }
+
+    /// Get all session IDs
+    pub fn get_session_ids(&self) -> Vec<String> {
+        self.sessions.iter().map(|entry| entry.key().clone()).collect()
+    }
+
+    /// Get sessions by provider
+    pub fn get_sessions_by_provider(&self, provider: &str) -> Vec<String> {
+        self.session_providers
+            .iter()
+            .filter(|entry| entry.value() == provider)
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    /// Get session count by status
+    pub fn get_session_count_by_status(&self, status: meshag_connectors::SessionStatus) -> usize {
+        self.sessions
+            .iter()
+            .filter(|entry| {
+                std::mem::discriminant(&entry.value().status) == std::mem::discriminant(&status)
+            })
+            .count()
+    }
+
+    /// Check if service is healthy (all dependencies available)
+    pub async fn is_service_healthy(&self) -> bool {
+        let health_checks = self.is_ready().await;
+        health_checks.iter().all(|check| check.status == "healthy")
     }
 }
 
@@ -540,9 +642,19 @@ impl ServiceState for TransportServiceState {
 
         metrics.push(format!("active_sessions {}", self.sessions.len()));
         metrics.push(format!("registered_connectors {}", self.connectors.len()));
+        metrics.push(format!("session_provider_mappings {}", self.session_providers.len()));
+
+        // Add provider-specific session counts
+        let mut provider_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for provider in self.session_providers.iter() {
+            *provider_counts.entry(provider.value().clone()).or_insert(0) += 1;
+        }
+        for (provider, count) in provider_counts {
+            metrics.push(format!("sessions_by_provider_{}  {}", provider, count));
+        }
 
         // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("transport.input").await {
+        if let Ok(queue_metrics) = self.event_queue.get_metrics("transport-input").await {
             metrics.push(format!(
                 "pending_messages {}",
                 queue_metrics.pending_messages
@@ -564,6 +676,14 @@ pub struct CreateSessionRequest {
     pub room_config: RoomConfig,
     pub participant_config: ParticipantConfig,
     pub options: HashMap<String, serde_json::Value>,
+}
+
+/// Session statistics
+#[derive(Debug, serde::Serialize)]
+pub struct SessionStats {
+    pub total_sessions: usize,
+    pub active_sessions: usize,
+    pub provider_counts: HashMap<String, usize>,
 }
 
 /// WebSocket message types
@@ -607,5 +727,32 @@ impl WebSocketConnection {
             session_id: None,
             connected_at: chrono::Utc::now(),
         }
+    }
+
+    pub fn with_session(session_id: String) -> Self {
+        Self {
+            session_id: Some(session_id),
+            connected_at: chrono::Utc::now(),
+        }
+    }
+
+    pub fn is_in_session(&self) -> bool {
+        self.session_id.is_some()
+    }
+
+    pub fn get_session_id(&self) -> Option<&String> {
+        self.session_id.as_ref()
+    }
+
+    pub fn join_session(&mut self, session_id: String) {
+        self.session_id = Some(session_id);
+    }
+
+    pub fn leave_session(&mut self) {
+        self.session_id = None;
+    }
+
+    pub fn connection_duration(&self) -> chrono::Duration {
+        chrono::Utc::now() - self.connected_at
     }
 }

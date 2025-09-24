@@ -63,7 +63,7 @@ impl LlmService {
         queue
             .consume_events(
                 StreamConfig::stt_output(),
-                "stt.output".to_string(),
+                "stt-output".to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
                     let q = q_clone.clone();
@@ -215,7 +215,7 @@ async fn handle_transcription(
                 target_service: "tts-service".to_string(),
             };
 
-            queue.publish_event("llm.output", output_event).await?;
+            queue.publish_event("llm-output", output_event).await?;
         }
         Err(e) => {
             error!("LLM generation failed: {}", e);
@@ -319,7 +319,7 @@ impl ServiceState for LlmServiceState {
         metrics.push(format!("active_conversations {}", active_conversations));
 
         // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("stt.output").await {
+        if let Ok(queue_metrics) = self.event_queue.get_metrics("stt-output").await {
             metrics.push(format!(
                 "pending_messages {}",
                 queue_metrics.pending_messages
