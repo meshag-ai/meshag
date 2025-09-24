@@ -75,6 +75,15 @@ impl DailyTransportConnector {
             properties["max_participants"] = json!(max_participants);
         }
 
+        // Add inactivity timeout settings
+        if let Some(eject_after_elapsed) = room_config.eject_after_elapsed {
+            properties["eject_after_elapsed"] = json!(eject_after_elapsed);
+        }
+
+        if let Some(eject_at_room_exp) = room_config.eject_at_room_exp {
+            properties["eject_at_room_exp"] = json!(eject_at_room_exp);
+        }
+
         let request_body = json!({
             "name": room_name,
             "privacy": privacy,

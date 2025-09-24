@@ -63,7 +63,7 @@ impl SttService {
         queue
             .consume_events(
                 StreamConfig::audio_input(),
-                "audio.input".to_string(),
+                "audio-input".to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
                     let q = q_clone.clone();
@@ -180,7 +180,7 @@ async fn handle_audio_chunk(
                 target_service: "llm-service".to_string(),
             };
 
-            queue.publish_event("stt.output", output_event).await?;
+            queue.publish_event("stt-output", output_event).await?;
         }
         Err(e) => {
             error!("STT transcription failed: {}", e);
@@ -269,7 +269,7 @@ impl ServiceState for SttServiceState {
         ));
 
         // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("audio.input").await {
+        if let Ok(queue_metrics) = self.event_queue.get_metrics("audio-input").await {
             metrics.push(format!(
                 "pending_messages {}",
                 queue_metrics.pending_messages

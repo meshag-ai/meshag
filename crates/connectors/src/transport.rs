@@ -29,6 +29,8 @@ pub struct RoomConfig {
     pub enable_recording: bool,
     pub enable_transcription: bool,
     pub enable_chat: bool,
+    pub eject_after_elapsed: Option<u32>, // Auto-eject participants after X seconds of inactivity
+    pub eject_at_room_exp: Option<bool>,  // Eject all participants when room expires
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

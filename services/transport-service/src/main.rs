@@ -296,6 +296,8 @@ async fn create_session_with_config(
             enable_recording: request.enable_recording.unwrap_or(true),
             enable_transcription: request.enable_transcription.unwrap_or(true),
             enable_chat: true,
+            eject_after_elapsed: Some(60), // Auto-eject after 60 seconds (1 minute) of inactivity
+            eject_at_room_exp: Some(true), // Eject all participants when room expires
         },
         participant_config: meshag_connectors::ParticipantConfig {
             name: Some("agent".to_string()),
