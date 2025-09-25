@@ -107,6 +107,13 @@ pub trait TransportConnector: Send + Sync {
     /// List active sessions
     async fn list_sessions(&self) -> Result<Vec<SessionInfo>>;
 
+    /// Create a meeting token for a participant
+    async fn create_meeting_token(
+        &self,
+        session_id: &str,
+        participant: ParticipantConfig,
+    ) -> Result<String>;
+
     /// Get provider-specific configuration schema
     fn config_schema(&self) -> serde_json::Value;
 }

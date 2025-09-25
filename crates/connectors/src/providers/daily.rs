@@ -108,51 +108,6 @@ impl DailyTransportConnector {
         Ok(room_data)
     }
 
-    pub async fn create_meeting_token(
-        &self,
-        room_name: &str,
-        participant_config: &ParticipantConfig,
-    ) -> Result<String> {
-        let mut properties = json!({
-            "room_name": room_name,
-            "is_owner": participant_config.is_owner,
-            "user_name": participant_config.name,
-            "enable_screenshare": participant_config.permissions.can_send_screen_video,
-            "start_video_off": !participant_config.permissions.can_send_video,
-            "start_audio_off": !participant_config.permissions.can_send_audio,
-        });
-
-        // Set expiration to 1 hour from now
-        let exp = chrono::Utc::now().timestamp() + 3600;
-        properties["exp"] = json!(exp);
-
-        let request_body = json!({
-            "properties": properties
-        });
-
-        let response = self
-            .client
-            .post("https://api.daily.co/v1/meeting-tokens")
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .header("Content-Type", "application/json")
-            .json(&request_body)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow!("Daily.co meeting token error: {}", error_text));
-        }
-
-        let token_data: serde_json::Value = response.json().await?;
-        let token = token_data["token"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Invalid token response from Daily.co"))?
-            .to_string();
-
-        Ok(token)
-    }
-
     async fn get_room_info(&self, room_name: &str) -> Result<serde_json::Value> {
         let response = self
             .client
@@ -256,7 +211,7 @@ impl TransportConnector for DailyTransportConnector {
 
         // Create meeting token for the participant
         let meeting_token = self
-            .create_meeting_token(room_name, &request.participant_config)
+            .create_meeting_token(room_name, request.participant_config.clone())
             .await?;
 
         let mut provider_metadata = HashMap::new();
@@ -351,6 +306,51 @@ impl TransportConnector for DailyTransportConnector {
         }
 
         Ok(sessions)
+    }
+
+    async fn create_meeting_token(
+        &self,
+        session_id: &str,
+        participant: ParticipantConfig,
+    ) -> Result<String> {
+        let mut properties = json!({
+            "room_name": session_id,
+            "is_owner": participant.is_owner,
+            "user_name": participant.name,
+            "enable_screenshare": participant.permissions.can_send_screen_video,
+            "start_video_off": !participant.permissions.can_send_video,
+            "start_audio_off": !participant.permissions.can_send_audio,
+        });
+
+        // Set expiration to 1 hour from now
+        let exp = chrono::Utc::now().timestamp() + 3600;
+        properties["exp"] = json!(exp);
+
+        let request_body = json!({
+            "properties": properties
+        });
+
+        let response = self
+            .client
+            .post("https://api.daily.co/v1/meeting-tokens")
+            .header("Authorization", format!("Bearer {}", self.config.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(anyhow!("Daily.co meeting token error: {}", error_text));
+        }
+
+        let token_data: serde_json::Value = response.json().await?;
+        let token = token_data["token"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid token response from Daily.co"))?
+            .to_string();
+
+        Ok(token)
     }
 
     fn config_schema(&self) -> serde_json::Value {

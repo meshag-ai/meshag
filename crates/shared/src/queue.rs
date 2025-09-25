@@ -197,8 +197,14 @@ impl EventQueue {
         let consumer_config = jetstream::consumer::pull::Config {
             durable_name: Some(format!(
                 "{}_{}",
-                subject.replace('.', "_"),
+                subject
+                    .replace('.', "_")
+                    .replace('/', "_")
+                    .replace('\\', "_"),
                 self.consumer_name
+                    .replace('.', "_")
+                    .replace('/', "_")
+                    .replace('\\', "_")
             )),
             description: Some(format!("Consumer for {} processing", subject)),
             deliver_policy: jetstream::consumer::DeliverPolicy::New,

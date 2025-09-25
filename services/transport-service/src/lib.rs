@@ -1,25 +1,25 @@
 use anyhow::Result;
 use async_trait::async_trait;
-use base64::{engine::general_purpose, Engine as _};
 use dashmap::DashMap;
-use futures_util::{SinkExt, StreamExt};
 use meshag_connectors::{
-    Daily, DailyConfig, ParticipantConfig, RoomConfig, SessionInfo, TransportConnector,
-    TransportRequest, TransportResponse,
+    twilio_transport_connector, ParticipantConfig, RoomConfig, SessionInfo, TransportConnector,
+    TransportRequest, TransportResponse, TwilioConfig,
 };
 use meshag_orchestrator::{AgentConfig, ConfigStorage};
 use meshag_service_common::{HealthCheck, ServiceState};
-use meshag_shared::EventQueue;
+use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 /// Transport service configuration
 #[derive(Debug, Clone)]
 pub struct TransportServiceConfig {
-    pub daily_api_key: String,
-    pub daily_domain: String,
+    pub twilio_account_sid: String,
+    pub twilio_auth_token: String,
+    pub twilio_phone_number: String,
+    pub twilio_webhook_url: String,
     pub nats_url: String,
     pub valkey_url: String,
 }
@@ -27,10 +27,14 @@ pub struct TransportServiceConfig {
 impl TransportServiceConfig {
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            daily_api_key: std::env::var("DAILY_API_KEY")
-                .map_err(|_| anyhow::anyhow!("DAILY_API_KEY environment variable not set"))?,
-            daily_domain: std::env::var("DAILY_DOMAIN")
-                .map_err(|_| anyhow::anyhow!("DAILY_DOMAIN environment variable not set"))?,
+            twilio_account_sid: std::env::var("TWILIO_ACCOUNT_SID")
+                .unwrap_or_else(|_| "".to_string()),
+            twilio_auth_token: std::env::var("TWILIO_AUTH_TOKEN")
+                .unwrap_or_else(|_| "".to_string()),
+            twilio_phone_number: std::env::var("TWILIO_PHONE_NUMBER")
+                .unwrap_or_else(|_| "".to_string()),
+            twilio_webhook_url: std::env::var("TWILIO_WEBHOOK_URL")
+                .unwrap_or_else(|_| "".to_string()),
             nats_url: std::env::var("NATS_URL")
                 .unwrap_or_else(|_| "nats://localhost:4222".to_string()),
             valkey_url: std::env::var("VALKEY_URL")
@@ -48,36 +52,43 @@ pub struct TransportServiceState {
     pub sessions: DashMap<String, SessionInfo>,
     pub session_providers: DashMap<String, String>, // Maps session_id -> provider_name
     pub config_storage: Arc<ConfigStorage>,
-    pub daily_domain: String,
 }
 
 impl TransportServiceState {
     pub async fn new(config: TransportServiceConfig) -> Result<Arc<Self>> {
-        let event_queue = Arc::new(EventQueue::new(&config.nats_url).await?);
+        let event_queue = Arc::new(EventQueue::new("transport-service").await?);
         let connectors = DashMap::new();
         let sessions = DashMap::new();
         let valkey_url =
             std::env::var("VALKEY_URL").unwrap_or_else(|_| "redis://localhost:6379".to_string());
 
         tracing::info!("Connecting to Valkey at: {}", valkey_url);
-        let config_storage = Arc::new(
-            ConfigStorage::new(&valkey_url)
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to connect to Valkey at '{}': {}", valkey_url, e);
-                    anyhow::anyhow!("Valkey connection failed: {}", e)
-                })?
-        );
+        let config_storage = Arc::new(ConfigStorage::new(&valkey_url).await.map_err(|e| {
+            tracing::error!("Failed to connect to Valkey at '{}': {}", valkey_url, e);
+            anyhow::anyhow!("Valkey connection failed: {}", e)
+        })?);
         tracing::info!("Successfully connected to Valkey");
 
-        // Register Daily.co connector
-        let daily_config =
-            DailyConfig::new(config.daily_api_key.clone(), config.daily_domain.clone());
-        let daily_connector = Daily::transport_connector(daily_config);
-        connectors.insert("daily".to_string(), Arc::from(daily_connector));
+        // Register Twilio connector if credentials are provided
+        if !config.twilio_account_sid.is_empty()
+            && !config.twilio_auth_token.is_empty()
+            && !config.twilio_phone_number.is_empty()
+        {
+            let twilio_config = TwilioConfig::new(
+                config.twilio_account_sid.clone(),
+                config.twilio_auth_token.clone(),
+                config.twilio_phone_number.clone(),
+            )
+            .with_webhook_url(config.twilio_webhook_url.clone());
 
-        let daily_domain =
-            std::env::var("DAILY_DOMAIN").unwrap_or_else(|_| "observeaia".to_string());
+            let twilio_connector = twilio_transport_connector(twilio_config);
+            connectors.insert("twilio".to_string(), twilio_connector);
+            tracing::info!("Twilio connector registered successfully");
+        } else {
+            tracing::warn!(
+                "Twilio credentials not provided, skipping Twilio connector registration"
+            );
+        }
 
         Ok(Arc::new(Self {
             config,
@@ -86,7 +97,6 @@ impl TransportServiceState {
             sessions,
             session_providers: DashMap::new(),
             config_storage,
-            daily_domain,
         }))
     }
 
@@ -124,7 +134,8 @@ impl TransportServiceState {
         self.sessions.insert(session_id.clone(), session_info);
 
         // Store the provider mapping for this session
-        self.session_providers.insert(session_id, request.provider.clone());
+        self.session_providers
+            .insert(session_id, request.provider.clone());
 
         Ok(response)
     }
@@ -183,15 +194,13 @@ impl TransportServiceState {
                     },
                 };
 
-                // Create meeting token for the agent
-                let agent_token = if let Some(daily_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::daily::DailyTransportConnector>() {
-                    daily_connector.create_meeting_token(session_id, &agent_participant_config).await?
-                } else {
-                    return Err(anyhow::anyhow!("Failed to cast connector to Daily.co connector"));
-                };
+                // Create meeting token for the agent using the connector
+                let agent_token = connector
+                    .create_meeting_token(session_id, agent_participant_config.clone())
+                    .await?;
 
                 // Start the AI agent processing pipeline
-                self.start_ai_agent_pipeline(session_id, &agent_token)
+                self.start_ai_agent_pipeline(session_id, &agent_token, &provider_name)
                     .await?;
 
                 tracing::info!(
@@ -214,7 +223,12 @@ impl TransportServiceState {
     }
 
     /// Start the AI agent processing pipeline
-    async fn start_ai_agent_pipeline(&self, session_id: &str, agent_token: &str) -> Result<()> {
+    async fn start_ai_agent_pipeline(
+        &self,
+        session_id: &str,
+        agent_token: &str,
+        provider_name: &str,
+    ) -> Result<()> {
         // Load configuration for this session
         let _config = self
             .get_config(session_id)
@@ -232,217 +246,33 @@ impl TransportServiceState {
         // Load the configuration
         router.load_config(session_id).await?;
 
-        // Start background tasks for the AI agent
-        let event_queue = self.event_queue.clone();
-        let session_id_clone = session_id.to_string();
-        let agent_token_clone = agent_token.to_string();
+        // Start background tasks for the AI agent based on provider
 
-        // Task 1: Listen for audio from Daily.co and send to STT
-        let event_queue1 = event_queue.clone();
-        let session_id1 = session_id_clone.clone();
-        let agent_token1 = agent_token_clone.clone();
-        let router1 = router.clone();
-        let state1 = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = state1
-                .handle_daily_audio_input(&session_id1, &agent_token1, &event_queue1, &router1)
-                .await
-            {
-                tracing::error!("Error handling Daily.co audio input: {}", e);
+        match provider_name {
+            "daily" => {
+                // For Daily.co, the connector will handle WebSocket connections internally
+                // The transport service no longer manages Daily.co specific WebSocket handling
+                tracing::info!(
+                    "Daily.co provider detected - connector handles WebSocket internally"
+                );
             }
-        });
-
-        // Task 2: Listen for processed audio from TTS and send to Daily.co
-        let event_queue2 = event_queue.clone();
-        let session_id2 = session_id_clone.clone();
-        let agent_token2 = agent_token_clone.clone();
-        let router2 = router.clone();
-        let state2 = self.clone();
-        tokio::spawn(async move {
-            if let Err(e) = state2
-                .handle_tts_audio_output(&session_id2, &agent_token2, &event_queue2, &router2)
-                .await
-            {
-                tracing::error!("Error handling TTS audio output: {}", e);
+            "twilio" => {
+                // For Twilio, we don't need WebSocket handling as it uses phone calls
+                // The audio processing will be handled through webhooks
+                tracing::info!("Twilio provider detected - audio processing via webhooks");
             }
-        });
+            _ => {
+                tracing::warn!(
+                    "Unknown provider: {} - no specific audio handling implemented",
+                    provider_name
+                );
+            }
+        }
 
         // Send initial greeting
-        self.send_ai_greeting(&session_id_clone, &agent_token_clone, &router)
+        self.send_ai_greeting(session_id, agent_token, &router)
             .await?;
 
-        Ok(())
-    }
-
-    /// Handle audio input from Daily.co and send to STT service
-    async fn handle_daily_audio_input(
-        &self,
-        session_id: &str,
-        _agent_token: &str,
-        _event_queue: &meshag_shared::EventQueue,
-        router: &meshag_orchestrator::ServiceRouter,
-    ) -> Result<()> {
-        tracing::info!(
-            "AI agent listening for audio from Daily.co room: {}",
-            session_id
-        );
-
-        // Connect to Daily.co WebSocket using agent token
-        let ws_url = format!("wss://{}.daily.co/{}", self.daily_domain, session_id);
-        let mut ws_stream = tokio_tungstenite::connect_async(&ws_url).await?;
-
-        tracing::info!(
-            "Connected to Daily.co WebSocket for session: {}",
-            session_id
-        );
-
-        // Listen for audio events from users
-        while let Some(msg) = ws_stream.0.next().await {
-            match msg {
-                Ok(Message::Binary(audio_data)) => {
-                    // Create minimal event payload
-                    let payload = serde_json::json!({
-                        "audio_data": general_purpose::STANDARD.encode(&audio_data),
-                        "format": "pcm",
-                        "sample_rate": 16000,
-                        "channels": 1
-                    });
-
-                    // Route using config-based pipeline
-                    if let Err(e) = router.route_to_next(payload, session_id).await {
-                        tracing::error!("Failed to route audio: {}", e);
-                    }
-                }
-                Ok(Message::Text(text)) => {
-                    // Handle text messages (e.g., participant events)
-                    tracing::debug!("Received text message: {}", text);
-                }
-                Ok(Message::Close(_)) => {
-                    tracing::info!(
-                        "Daily.co WebSocket connection closed for session: {}",
-                        session_id
-                    );
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!("WebSocket error for session {}: {}", session_id, e);
-                    break;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle processed audio from TTS service and send to Daily.co
-    async fn handle_tts_audio_output(
-        &self,
-        session_id: &str,
-        agent_token: &str,
-        event_queue: &meshag_shared::EventQueue,
-        _router: &meshag_orchestrator::ServiceRouter,
-    ) -> Result<()> {
-        tracing::info!(
-            "AI agent listening for TTS output for session: {}",
-            session_id
-        );
-
-        // Listen to NATS stream for TTS output
-        let stream_config = meshag_shared::StreamConfig {
-            name: "tts-output".to_string(),
-            subjects: vec!["tts-output".to_string()],
-            max_messages: 10000,
-            max_bytes: 1024 * 1024 * 100, // 100MB
-            max_age: std::time::Duration::from_secs(3600),
-        };
-
-        let consumer = event_queue
-            .create_consumer(stream_config, "tts-output".to_string())
-            .await?;
-
-        // Use batch method to consume messages
-        loop {
-            match consumer.batch().max_messages(10).messages().await {
-                Ok(mut messages) => {
-                    while let Some(message_result) = messages.next().await {
-                        match message_result {
-                            Ok(message) => {
-                                if let Ok(payload) = serde_json::from_slice::<meshag_shared::ProcessingEvent>(
-                                    &message.payload,
-                                ) {
-                                    // Check if this event is for our session
-                                    if payload.conversation_id.to_string() == session_id {
-                                        tracing::debug!("Received TTS audio for session: {}", session_id);
-
-                                        // Extract audio data from the event
-                                        if let Some(audio_data_b64) = payload.payload.get("audio_data") {
-                                            if let Some(audio_data_str) = audio_data_b64.as_str() {
-                                                if let Ok(audio_data) =
-                                                    general_purpose::STANDARD.decode(audio_data_str)
-                                                {
-                                                    // Send audio data to Daily.co room using agent token
-                                                    if let Err(e) = self
-                                                        .send_audio_to_daily(
-                                                            session_id,
-                                                            agent_token,
-                                                            &audio_data,
-                                                        )
-                                                    .await
-                                                    {
-                                                        tracing::error!(
-                                                            "Failed to send audio to Daily.co: {}",
-                                                            e
-                                                        );
-                                                    } else {
-                                                        tracing::debug!("Sent audio data to Daily.co room");
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Acknowledge the message
-                                if let Err(e) = message.ack().await {
-                                    tracing::error!("Failed to acknowledge message: {}", e);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Error receiving message: {}", e);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("Error receiving TTS audio event: {}", e);
-                    break;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Send audio data to Daily.co room
-    async fn send_audio_to_daily(
-        &self,
-        session_id: &str,
-        _agent_token: &str,
-        audio_data: &[u8],
-    ) -> Result<()> {
-        // Connect to Daily.co WebSocket to send audio
-        let ws_url = format!("wss://{}.daily.co/{}", self.daily_domain, session_id);
-        let (mut ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
-
-        // Send audio data as binary message
-        ws_stream.send(Message::Binary(audio_data.to_vec())).await?;
-
-        tracing::debug!(
-            "Sent {} bytes of audio to Daily.co room {}",
-            audio_data.len(),
-            session_id
-        );
         Ok(())
     }
 
@@ -486,10 +316,10 @@ impl TransportServiceState {
         if let Some(provider) = self.session_providers.get(session_id) {
             Some(provider.clone())
         } else {
-            // If session not found in cache, assume Daily.co as default
+            // If session not found in cache, return None
             // This handles cases where sessions might have been created before
             // the provider mapping was implemented
-            Some("daily".to_string())
+            None
         }
     }
 
@@ -527,14 +357,17 @@ impl TransportServiceState {
             .filter(|entry| {
                 matches!(
                     entry.value().status,
-                    meshag_connectors::SessionStatus::Created | meshag_connectors::SessionStatus::Active
+                    meshag_connectors::SessionStatus::Created
+                        | meshag_connectors::SessionStatus::Active
                 )
             })
             .count();
 
         let mut provider_counts = std::collections::HashMap::new();
         for provider_entry in self.session_providers.iter() {
-            *provider_counts.entry(provider_entry.value().clone()).or_insert(0) += 1;
+            *provider_counts
+                .entry(provider_entry.value().clone())
+                .or_insert(0) += 1;
         }
 
         SessionStats {
@@ -551,7 +384,10 @@ impl TransportServiceState {
 
     /// Get all session IDs
     pub fn get_session_ids(&self) -> Vec<String> {
-        self.sessions.iter().map(|entry| entry.key().clone()).collect()
+        self.sessions
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
     }
 
     /// Get sessions by provider
@@ -577,6 +413,225 @@ impl TransportServiceState {
     pub async fn is_service_healthy(&self) -> bool {
         let health_checks = self.is_ready().await;
         health_checks.iter().all(|check| check.status == "healthy")
+    }
+
+    /// Read message from WebSocket connection via connector
+    pub async fn read_websocket_message(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<tokio_tungstenite::tungstenite::Message>> {
+        if let Some(provider_name) = self.get_provider_for_session(session_id) {
+            if let Some(connector) = self.get_connector(&provider_name) {
+                match provider_name.as_str() {
+                    "twilio" => {
+                        if let Some(twilio_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::twilio::TwilioTransportConnector>() {
+                            twilio_connector.read_message(session_id).await
+                        } else {
+                            Err(anyhow::anyhow!("Failed to cast connector to Twilio connector"))
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("WebSocket reading not supported for provider: {}", provider_name))
+                }
+            } else {
+                Err(anyhow::anyhow!(
+                    "Connector not found for provider: {}",
+                    provider_name
+                ))
+            }
+        } else {
+            Err(anyhow::anyhow!(
+                "Provider not found for session: {}",
+                session_id
+            ))
+        }
+    }
+
+    /// Write message to WebSocket connection via connector
+    pub async fn write_websocket_message(
+        &self,
+        session_id: &str,
+        message: tokio_tungstenite::tungstenite::Message,
+    ) -> Result<()> {
+        if let Some(provider_name) = self.get_provider_for_session(session_id) {
+            if let Some(connector) = self.get_connector(&provider_name) {
+                match provider_name.as_str() {
+                    "twilio" => {
+                        if let Some(twilio_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::twilio::TwilioTransportConnector>() {
+                            twilio_connector.write_message(session_id, message).await
+                        } else {
+                            Err(anyhow::anyhow!("Failed to cast connector to Twilio connector"))
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("WebSocket writing not supported for provider: {}", provider_name))
+                }
+            } else {
+                Err(anyhow::anyhow!(
+                    "Connector not found for provider: {}",
+                    provider_name
+                ))
+            }
+        } else {
+            Err(anyhow::anyhow!(
+                "Provider not found for session: {}",
+                session_id
+            ))
+        }
+    }
+
+    /// Publish media event to STT service via NATS
+    pub async fn publish_media_event(
+        &self,
+        session_id: &str,
+        call_sid: &str,
+        stream_sid: &str,
+        track: &str,
+        chunk: &str,
+        timestamp: &str,
+        payload: &str,
+        media_format: TwilioMediaFormat,
+    ) -> Result<String> {
+        let media_payload = MediaEventPayload {
+            session_id: session_id.to_string(),
+            call_sid: call_sid.to_string(),
+            stream_sid: stream_sid.to_string(),
+            track: track.to_string(),
+            chunk: chunk.to_string(),
+            timestamp: timestamp.to_string(),
+            payload: payload.to_string(),
+            media_format,
+        };
+
+        let event = ProcessingEvent {
+            conversation_id: Uuid::new_v4(), // Generate new conversation ID for each media event
+            correlation_id: Uuid::new_v4(),
+            event_type: "media_input".to_string(),
+            payload: serde_json::to_value(media_payload)?,
+            timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+            source_service: "transport-service".to_string(),
+            target_service: "stt-service".to_string(),
+        };
+
+        let subject = "AUDIO_INPUT";
+        let message_id = self.event_queue.publish_event(subject, event).await?;
+
+        tracing::info!(
+            session_id = %session_id,
+            call_sid = %call_sid,
+            track = %track,
+            chunk = %chunk,
+            message_id = %message_id,
+            "Published media event to STT service"
+        );
+
+        Ok(message_id)
+    }
+
+    /// Start consuming response events and writing them to WebSocket
+    pub async fn start_response_consumer(&self) -> Result<()> {
+        let event_queue = self.event_queue.clone();
+        let session_providers = self.session_providers.clone();
+        let connectors = self.connectors.clone();
+
+        tokio::spawn(async move {
+            let stream_config = StreamConfig::tts_output();
+            let subject = "TTS_OUTPUT".to_string();
+
+            if let Err(e) = event_queue.consume_events(stream_config, subject, move |event| {
+                let session_providers = session_providers.clone();
+                let connectors = connectors.clone();
+
+                async move {
+                    if let Some(payload) = event.payload.get("session_id") {
+                        if let Some(session_id) = payload.as_str() {
+                            // Parse response payload
+                            if let Ok(response_payload) = serde_json::from_value::<ResponseEventPayload>(event.payload.clone()) {
+                                tracing::info!(
+                                    session_id = %session_id,
+                                    response_type = %response_payload.response_type,
+                                    "Received response event for WebSocket"
+                                );
+
+                                // Write response to WebSocket
+                                if let Some(provider_entry) = session_providers.get(session_id) {
+                                    let provider_name = provider_entry.value().clone();
+                                    if let Some(connector) = connectors.get(&provider_name) {
+                                        match provider_name.as_str() {
+                                            "twilio" => {
+                                                if let Some(twilio_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::twilio::TwilioTransportConnector>() {
+                                                    // Create Twilio media message for outbound audio
+                                                    let media_message = serde_json::json!({
+                                                        "event": "media",
+                                                        "streamSid": response_payload.call_sid,
+                                                        "media": {
+                                                            "track": "outbound",
+                                                            "chunk": "1",
+                                                            "timestamp": chrono::Utc::now().timestamp_millis().to_string(),
+                                                            "payload": response_payload.data
+                                                        }
+                                                    });
+
+                                                    let ws_message = tokio_tungstenite::tungstenite::Message::Text(
+                                                        serde_json::to_string(&media_message)?
+                                                    );
+
+                                                    if let Err(e) = twilio_connector.write_message(session_id, ws_message).await {
+                                                        tracing::error!(
+                                                            session_id = %session_id,
+                                                            error = %e,
+                                                            "Failed to write response to WebSocket"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                            _ => {
+                                                tracing::warn!(
+                                                    session_id = %session_id,
+                                                    provider = %provider_name,
+                                                    "Response writing not supported for provider"
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+            }).await {
+                tracing::error!("Response consumer error: {}", e);
+            }
+        });
+
+        Ok(())
+    }
+
+    /// Check if WebSocket is connected via connector
+    pub async fn is_websocket_connected(&self, session_id: &str) -> Result<bool> {
+        if let Some(provider_name) = self.get_provider_for_session(session_id) {
+            if let Some(connector) = self.get_connector(&provider_name) {
+                match provider_name.as_str() {
+                    "twilio" => {
+                        if let Some(twilio_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::twilio::TwilioTransportConnector>() {
+                            Ok(twilio_connector.is_websocket_connected(session_id).await)
+                        } else {
+                            Err(anyhow::anyhow!("Failed to cast connector to Twilio connector"))
+                        }
+                    }
+                    _ => Err(anyhow::anyhow!("WebSocket connection check not supported for provider: {}", provider_name))
+                }
+            } else {
+                Err(anyhow::anyhow!(
+                    "Connector not found for provider: {}",
+                    provider_name
+                ))
+            }
+        } else {
+            Err(anyhow::anyhow!(
+                "Provider not found for session: {}",
+                session_id
+            ))
+        }
     }
 }
 
@@ -642,10 +697,14 @@ impl ServiceState for TransportServiceState {
 
         metrics.push(format!("active_sessions {}", self.sessions.len()));
         metrics.push(format!("registered_connectors {}", self.connectors.len()));
-        metrics.push(format!("session_provider_mappings {}", self.session_providers.len()));
+        metrics.push(format!(
+            "session_provider_mappings {}",
+            self.session_providers.len()
+        ));
 
         // Add provider-specific session counts
-        let mut provider_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut provider_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for provider in self.session_providers.iter() {
             *provider_counts.entry(provider.value().clone()).or_insert(0) += 1;
         }
@@ -713,6 +772,66 @@ pub enum WebSocketMessage {
     Ping,
     #[serde(rename = "pong")]
     Pong,
+    // Twilio Stream events
+    #[serde(rename = "connected")]
+    TwilioConnected { protocol: String, version: String },
+    #[serde(rename = "start")]
+    TwilioStart {
+        sequence_number: String,
+        start: TwilioStartData,
+    },
+    #[serde(rename = "media")]
+    TwilioMedia {
+        sequence_number: String,
+        media: TwilioMediaData,
+    },
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TwilioStartData {
+    pub account_sid: String,
+    pub call_sid: String,
+    pub stream_sid: String,
+    pub tracks: Vec<String>,
+    pub media_format: TwilioMediaFormat,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TwilioMediaFormat {
+    pub encoding: String,
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TwilioMediaData {
+    pub track: String,
+    pub chunk: String,
+    pub timestamp: String,
+    pub payload: String,
+}
+
+/// Media event payload for NATS
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaEventPayload {
+    pub session_id: String,
+    pub call_sid: String,
+    pub stream_sid: String,
+    pub track: String,
+    pub chunk: String,
+    pub timestamp: String,
+    pub payload: String, // Base64 encoded audio data
+    pub media_format: TwilioMediaFormat,
+}
+
+/// Response event payload for WebSocket
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResponseEventPayload {
+    pub session_id: String,
+    pub call_sid: String,
+    pub response_type: String, // "tts_audio", "transcription", etc.
+    pub data: String, // Base64 encoded response data
+    pub metadata: HashMap<String, String>,
 }
 
 /// WebSocket connection state
