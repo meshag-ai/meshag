@@ -157,6 +157,11 @@ services:
       # Daily.co Configuration (Required)
       - DAILY_API_KEY=${DAILY_API_KEY:-}
       - DAILY_DOMAIN=${DAILY_DOMAIN:-}
+      # Twilio Configuration (Optional)
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER:-}
+      - TWILIO_WEBHOOK_URL=${TWILIO_WEBHOOK_URL:-}
     depends_on:
       nats:
         condition: service_healthy

@@ -21,4 +21,5 @@ pub use providers::{
     deepgram::{Deepgram, DeepgramConfig},
     elevenlabs::{ElevenLabs, ElevenLabsConfig},
     openai::{OpenAI, OpenAIConfig},
+    twilio::{twilio_transport_connector, TwilioConfig, TwilioTransportConnector},
 };

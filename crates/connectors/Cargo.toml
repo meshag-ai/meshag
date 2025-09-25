@@ -13,6 +13,8 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true, features = ["multipart"] }
 chrono = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
 meshag-shared = { path = "../shared" }
 
 # Provider-specific dependencies can be added as needed
