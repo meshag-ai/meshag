@@ -64,12 +64,7 @@ impl SttConnector for DeepgramSttConnector {
     }
 
     fn supported_formats(&self) -> Vec<AudioFormat> {
-        vec![
-            AudioFormat::Wav,
-            AudioFormat::Mp3,
-            AudioFormat::Flac,
-            AudioFormat::Ogg,
-        ]
+        vec![AudioFormat::Wav, AudioFormat::Mulaw]
     }
 
     fn supported_languages(&self) -> Option<Vec<String>> {

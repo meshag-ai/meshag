@@ -47,6 +47,44 @@ pub struct ProcessingEvent {
     pub target_service: String,
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TwilioMediaData {
+    pub track: String,
+    pub chunk: String,
+    pub timestamp: String,
+    pub payload: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct TwilioStartData {
+    pub account_sid: String,
+    pub call_sid: String,
+    pub stream_sid: String,
+    pub tracks: Vec<String>,
+    pub media_format: TwilioMediaFormat,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TwilioMediaFormat {
+    pub encoding: String,
+    #[serde(rename = "sampleRate")]
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+/// Media event payload for NATS
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaEventPayload {
+    pub session_id: String,
+    pub call_sid: String,
+    pub stream_sid: String,
+    pub track: String,
+    pub chunk: String,
+    pub timestamp: String,
+    pub payload: String, // Base64 encoded audio data
+    pub media_format: TwilioMediaFormat,
+}
+
 /// Stream configuration for different event types
 pub struct StreamConfig {
     pub name: String,
@@ -61,7 +99,7 @@ impl StreamConfig {
     pub fn audio_input() -> Self {
         Self {
             name: "AUDIO_INPUT".to_string(),
-            subjects: vec!["audio.>".to_string()],
+            subjects: vec!["AUDIO_INPUT".to_string()],
             max_messages: 100_000,
             max_bytes: 100_000_000,                       // 100MB
             max_age: std::time::Duration::from_secs(300), // 5 minutes
@@ -72,7 +110,7 @@ impl StreamConfig {
     pub fn stt_output() -> Self {
         Self {
             name: "STT_OUTPUT".to_string(),
-            subjects: vec!["stt.>".to_string()],
+            subjects: vec!["STT_OUTPUT".to_string()],
             max_messages: 100_000,
             max_bytes: 10_000_000, // 10MB (text is smaller)
             max_age: std::time::Duration::from_secs(600), // 10 minutes
@@ -83,7 +121,7 @@ impl StreamConfig {
     pub fn llm_output() -> Self {
         Self {
             name: "LLM_OUTPUT".to_string(),
-            subjects: vec!["llm.>".to_string()],
+            subjects: vec!["LLM_OUTPUT".to_string()],
             max_messages: 100_000,
             max_bytes: 50_000_000,                        // 50MB
             max_age: std::time::Duration::from_secs(600), // 10 minutes
@@ -94,7 +132,7 @@ impl StreamConfig {
     pub fn tts_output() -> Self {
         Self {
             name: "TTS_OUTPUT".to_string(),
-            subjects: vec!["tts.>".to_string()],
+            subjects: vec!["TTS_OUTPUT".to_string()],
             max_messages: 50_000,
             max_bytes: 500_000_000, // 500MB (audio is large)
             max_age: std::time::Duration::from_secs(300), // 5 minutes
@@ -174,13 +212,13 @@ impl EventQueue {
 
         let message_id = format!("{}:{}", ack.stream, ack.sequence);
 
-        info!(
-            subject = subject,
-            message_id = %message_id,
-            conversation_id = %event.conversation_id,
-            correlation_id = %event.correlation_id,
-            "Published event to NATS JetStream"
-        );
+        // info!(
+        //     subject = subject,
+        //     message_id = %message_id,
+        //     conversation_id = %event.conversation_id,
+        //     correlation_id = %event.correlation_id,
+        //     "Published event to NATS JetStream"
+        // );
 
         Ok(message_id)
     }

@@ -146,7 +146,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.transport-service
-    container_name: meshag-transport-service
+    container_name: transport-service
     ports:
       - "8084:8084"
     environment:

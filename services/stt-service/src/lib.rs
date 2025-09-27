@@ -1,14 +1,16 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use meshag_connectors::{AudioFormat, SttConnector, SttRequest};
 use meshag_orchestrator::ServiceRouter;
 use meshag_service_common::{HealthCheck, ServiceState};
+use meshag_shared::MediaEventPayload;
 use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
-use serde_json::json;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 pub struct SttService {
     connectors: Arc<RwLock<HashMap<String, Arc<dyn SttConnector>>>>,
@@ -56,14 +58,14 @@ impl SttService {
     }
 
     pub async fn start_processing(&self, queue: EventQueue) -> Result<()> {
-        info!("STT service starting to consume from audio.input");
+        info!("STT service starting to consume from AUDIO_INPUT");
 
         let service = Arc::new(self.clone());
         let q_clone = queue.clone();
         queue
             .consume_events(
                 StreamConfig::audio_input(),
-                "audio-input".to_string(),
+                "AUDIO_INPUT".to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
                     let q = q_clone.clone();
@@ -107,7 +109,7 @@ async fn handle_audio_event(
     event: ProcessingEvent,
 ) -> Result<()> {
     match event.event_type.as_str() {
-        "audio_chunk" => handle_audio_chunk(service, queue, event).await?,
+        "media_input" => handle_audio_chunk(service, queue, event).await?,
         "session_start" => handle_session_start(event).await?,
         "session_end" => handle_session_end(event).await?,
         _ => error!("Unknown event type: {}", event.event_type),
@@ -120,23 +122,24 @@ async fn handle_audio_chunk(
     queue: EventQueue,
     event: ProcessingEvent,
 ) -> Result<()> {
-    let audio_data = event.payload["audio_data"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Missing audio_data in payload"))?
-        .iter()
-        .map(|v| v.as_u64().unwrap_or(0) as u8)
-        .collect::<Vec<u8>>();
+    info!("Handling audio chunk: {:?}", event);
 
-    let is_final = event.payload["is_final"].as_bool().unwrap_or(false);
+    // Parse the MediaEventPayload from the transport service
+    let media_payload: MediaEventPayload = serde_json::from_value(event.payload.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to parse MediaEventPayload: {}", e))?;
 
-    if !is_final {
-        // For streaming, we might want to buffer chunks
-        // For now, we'll process each chunk immediately
-        return Ok(());
-    }
+    info!(
+        "Processing audio chunk: session_id={}, call_sid={}, track={}, chunk={}",
+        media_payload.session_id, media_payload.call_sid, media_payload.track, media_payload.chunk
+    );
+
+    // Decode base64 audio data
+    let audio_data = STANDARD
+        .decode(&media_payload.payload)
+        .map_err(|e| anyhow::anyhow!("Failed to decode base64 audio data: {}", e))?;
 
     // Get connector preference from event or use default
-    let connector_name = event.payload["connector"].as_str();
+    let connector_name = event.payload.get("connector").and_then(|v| v.as_str());
 
     // Clone the service to get access to connectors
     let connectors = service.connectors.read().await;
@@ -144,46 +147,71 @@ async fn handle_audio_chunk(
 
     let connector_key = connector_name.or_else(|| default_name.as_deref());
     let connector = match connector_key.and_then(|name| connectors.get(name)) {
-        Some(c) => c.as_ref(),
+        Some(connector) => connector,
         None => {
-            warn!("No connector available for STT processing");
-            return Ok(());
+            error!("No STT connector found for: {:?}", connector_key);
+            return Err(anyhow::anyhow!("No STT connector available"));
         }
     };
 
-    // Prepare STT request
-    let stt_request = SttRequest {
-        audio_data,
-        language: event.payload["language"].as_str().map(|s| s.to_string()),
-        sample_rate: event.payload["sample_rate"].as_u64().unwrap_or(16000) as u32,
-        channels: event.payload["channels"].as_u64().unwrap_or(1) as u8,
-        format: AudioFormat::Wav, // Default format, could be configurable
-        options: HashMap::new(),
-    };
+    let format: Result<AudioFormat, strum::ParseError> =
+        AudioFormat::from_str(&media_payload.media_format.encoding);
 
-    // Transcribe audio
-    match connector.transcribe(stt_request).await {
-        Ok(response) => {
-            let output_event = ProcessingEvent {
+    let mut encoding = None;
+
+    match format {
+        Ok(format) => {
+            encoding = Some(format);
+        }
+        _ => {
+            error!("Unsupported audio format: {:?}", format);
+            return Err(anyhow::anyhow!("Unsupported audio format"));
+        }
+    }
+
+    // Process the audio chunk
+    match connector
+        .transcribe(SttRequest {
+            audio_data: audio_data,
+            language: None,
+            sample_rate: media_payload.media_format.sample_rate,
+            channels: media_payload.media_format.channels,
+            format: encoding.unwrap(),
+            options: HashMap::new(),
+        })
+        .await
+    {
+        Ok(transcription) => {
+            info!("Transcription result: {:?}", transcription.text);
+
+            // Create response event for LLM service
+            let response_payload = serde_json::json!({
+                "session_id": media_payload.session_id,
+                "call_sid": media_payload.call_sid,
+                "transcription": transcription,
+                "timestamp": media_payload.timestamp,
+                "track": media_payload.track,
+                "chunk": media_payload.chunk
+            });
+
+            let response_event = ProcessingEvent {
                 conversation_id: event.conversation_id,
                 correlation_id: event.correlation_id,
-                event_type: "transcription_complete".to_string(),
-                payload: json!({
-                    "text": response.text,
-                    "confidence": response.confidence,
-                    "language_detected": response.language_detected,
-                    "processing_time_ms": response.processing_time_ms,
-                    "provider": connector.provider_name()
-                }),
+                event_type: "transcription_output".to_string(),
+                payload: response_payload,
                 timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
                 source_service: "stt-service".to_string(),
                 target_service: "llm-service".to_string(),
             };
 
-            queue.publish_event("stt-output", output_event).await?;
+            // Publish to LLM service
+            if let Err(e) = queue.publish_event("STT_OUTPUT", response_event).await {
+                error!("Failed to publish transcription to LLM service: {}", e);
+            }
         }
         Err(e) => {
-            error!("STT transcription failed: {}", e);
+            error!("Failed to process audio: {}", e);
+            return Err(e);
         }
     }
 
@@ -269,7 +297,7 @@ impl ServiceState for SttServiceState {
         ));
 
         // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("audio-input").await {
+        if let Ok(queue_metrics) = self.event_queue.get_metrics("AUDIO_INPUT").await {
             metrics.push(format!(
                 "pending_messages {}",
                 queue_metrics.pending_messages

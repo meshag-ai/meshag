@@ -228,20 +228,14 @@ impl OpenAISttConnector {
     fn format_to_mime_type(&self, format: &AudioFormat) -> &'static str {
         match format {
             AudioFormat::Wav => "audio/wav",
-            AudioFormat::Mp3 => "audio/mpeg",
-            AudioFormat::Flac => "audio/flac",
-            AudioFormat::Ogg => "audio/ogg",
-            AudioFormat::Raw => "audio/raw",
+            AudioFormat::Mulaw => "audio/x-mulaw",
         }
     }
 
     fn format_to_extension(&self, format: &AudioFormat) -> &'static str {
         match format {
             AudioFormat::Wav => "wav",
-            AudioFormat::Mp3 => "mp3",
-            AudioFormat::Flac => "flac",
-            AudioFormat::Ogg => "ogg",
-            AudioFormat::Raw => "raw",
+            AudioFormat::Mulaw => "mulaw",
         }
     }
 }
@@ -318,12 +312,7 @@ impl SttConnector for OpenAISttConnector {
     }
 
     fn supported_formats(&self) -> Vec<AudioFormat> {
-        vec![
-            AudioFormat::Mp3,
-            AudioFormat::Wav,
-            AudioFormat::Flac,
-            AudioFormat::Ogg,
-        ]
+        vec![AudioFormat::Wav, AudioFormat::Mulaw]
     }
 
     fn supported_languages(&self) -> Option<Vec<String>> {

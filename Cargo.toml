@@ -13,6 +13,9 @@ resolver = "2"
 
 [workspace.dependencies]
 # Common dependencies that will be shared
+base64 = "0.21"
+strum = "0.26"
+strum_macros = "0.26"
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.7", features = ["macros", "ws"] }
 serde = { version = "1.0", features = ["derive"] }

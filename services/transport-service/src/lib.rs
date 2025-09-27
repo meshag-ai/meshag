@@ -7,7 +7,10 @@ use meshag_connectors::{
 };
 use meshag_orchestrator::{AgentConfig, ConfigStorage};
 use meshag_service_common::{HealthCheck, ServiceState};
-use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
+use meshag_shared::{
+    EventQueue, MediaEventPayload, ProcessingEvent, StreamConfig, TwilioMediaData,
+    TwilioMediaFormat, TwilioStartData,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -514,14 +517,14 @@ impl TransportServiceState {
         let subject = "AUDIO_INPUT";
         let message_id = self.event_queue.publish_event(subject, event).await?;
 
-        tracing::info!(
-            session_id = %session_id,
-            call_sid = %call_sid,
-            track = %track,
-            chunk = %chunk,
-            message_id = %message_id,
-            "Published media event to STT service"
-        );
+        // tracing::info!(
+        //     session_id = %session_id,
+        //     call_sid = %call_sid,
+        //     track = %track,
+        //     chunk = %chunk,
+        //     message_id = %message_id,
+        //     "Published media event to STT service"
+        // );
 
         Ok(message_id)
     }
@@ -787,50 +790,13 @@ pub enum WebSocketMessage {
     },
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct TwilioStartData {
-    pub account_sid: String,
-    pub call_sid: String,
-    pub stream_sid: String,
-    pub tracks: Vec<String>,
-    pub media_format: TwilioMediaFormat,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct TwilioMediaFormat {
-    pub encoding: String,
-    pub sample_rate: u32,
-    pub channels: u32,
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct TwilioMediaData {
-    pub track: String,
-    pub chunk: String,
-    pub timestamp: String,
-    pub payload: String,
-}
-
-/// Media event payload for NATS
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaEventPayload {
-    pub session_id: String,
-    pub call_sid: String,
-    pub stream_sid: String,
-    pub track: String,
-    pub chunk: String,
-    pub timestamp: String,
-    pub payload: String, // Base64 encoded audio data
-    pub media_format: TwilioMediaFormat,
-}
-
 /// Response event payload for WebSocket
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseEventPayload {
     pub session_id: String,
     pub call_sid: String,
     pub response_type: String, // "tts_audio", "transcription", etc.
-    pub data: String, // Base64 encoded response data
+    pub data: String,          // Base64 encoded response data
     pub metadata: HashMap<String, String>,
 }
 

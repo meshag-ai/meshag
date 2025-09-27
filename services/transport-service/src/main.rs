@@ -8,15 +8,16 @@ use axum::{
 };
 
 use meshag_orchestrator::AgentConfig;
-use meshag_transport_service::{
-    CreateSessionRequest, TransportServiceConfig, TransportServiceState, WebSocketConnection,
-};
+use meshag_shared::TwilioMediaFormat;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::HashMap, sync::Arc};
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
-use tracing::{error, info, warn};
+use tracing::{error, info};
+use transport_service::{
+    CreateSessionRequest, TransportServiceConfig, TransportServiceState, WebSocketConnection,
+};
 
 /// Request to create a session with configuration
 #[derive(Debug, Deserialize)]
@@ -242,7 +243,7 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
 
     // Store session information for media events
     let mut session_info: HashMap<String, serde_json::Value> = HashMap::new();
-    let mut media_format: Option<meshag_transport_service::TwilioMediaFormat> = None;
+    let mut media_format: Option<TwilioMediaFormat> = None;
     let mut session_id: Option<String> = None;
 
     // Channel for NATS responses to WebSocket
@@ -265,7 +266,7 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                 if let Some(payload) = event.payload.get("session_id") {
                     if let Some(session_id) = payload.as_str() {
                         // Parse response payload
-                        if let Ok(response_payload) = serde_json::from_value::<meshag_transport_service::ResponseEventPayload>(event.payload.clone()) {
+                        if let Ok(response_payload) = serde_json::from_value::<transport_service::ResponseEventPayload>(event.payload.clone()) {
                             tracing::info!(
                                 session_id = %session_id,
                                 response_type = %response_payload.response_type,
@@ -353,7 +354,7 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                                             // Parse and store media format
                                             if let Some(format_data) = start_data.get("mediaFormat") {
                                                 if let Ok(format) = serde_json::from_value::<
-                                                    meshag_transport_service::TwilioMediaFormat,
+                                                    TwilioMediaFormat,
                                                 >(
                                                     format_data.clone()
                                                 ) {
@@ -383,10 +384,6 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                                                 .and_then(|p| p.as_str())
                                                 .unwrap_or("");
 
-                                            info!(
-                                                "Twilio Media Event: track={}, chunk={}, timestamp={}",
-                                                track, chunk, timestamp
-                                            );
 
                                             // Publish media event to STT service if we have session info and media format
                                             if let (Some(call_sid), Some(stream_sid), Some(format), Some(session_id)) = (
@@ -411,7 +408,7 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                                                     error!("Failed to publish media event: {}", e);
                                                 }
                                             } else {
-                                                warn!("Received media event but missing session info or media format");
+                                                // warn!("Received media event but missing session info or media format");
                                             }
                                         }
                                     }
