@@ -2,13 +2,14 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use strum_macros::EnumString;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SttRequest {
     pub audio_data: Vec<u8>,
     pub language: Option<String>,
     pub sample_rate: u32,
-    pub channels: u8,
+    pub channels: u32,
     pub format: AudioFormat,
     pub options: HashMap<String, serde_json::Value>,
 }
@@ -22,13 +23,12 @@ pub struct SttResponse {
     pub provider_metadata: HashMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, EnumString, PartialEq)]
 pub enum AudioFormat {
+    #[strum(serialize = "pcm")]
     Wav,
-    Mp3,
-    Flac,
-    Ogg,
-    Raw,
+    #[strum(serialize = "audio/x-mulaw")]
+    Mulaw,
 }
 
 /// Generic STT connector trait that all providers must implement

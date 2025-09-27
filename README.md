@@ -220,7 +220,7 @@ cargo check --workspace
 cargo run -p stt-service
 cargo run -p llm-service
 cargo run -p tts-service
-cargo run -p meshag-transport-service
+cargo run -p transport-service
 ```
 
 ### Adding New AI Providers

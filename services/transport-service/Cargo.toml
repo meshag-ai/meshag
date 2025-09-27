@@ -1,5 +1,5 @@
 [package]
-name = "meshag-transport-service"
+name = "transport-service"
 version = "0.1.0"
 edition = "2021"
 

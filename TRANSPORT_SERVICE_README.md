@@ -193,7 +193,7 @@ export DAILY_API_KEY="your-key"
 export DAILY_DOMAIN="your-domain"
 
 # Run the service
-cargo run -p meshag-transport-service
+cargo run -p transport-service
 ```
 
 ### Testing

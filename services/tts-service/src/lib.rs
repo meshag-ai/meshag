@@ -53,14 +53,14 @@ impl TtsService {
     }
 
     pub async fn start_processing(&self, queue: EventQueue) -> Result<()> {
-        info!("TTS service starting to consume from llm.output");
+        info!("TTS service starting to consume from LLM_OUTPUT");
 
         let service = Arc::new(self.clone());
         let q_clone = queue.clone();
         queue
             .consume_events(
                 StreamConfig::llm_output(),
-                "llm-output".to_string(),
+                "LLM_OUTPUT".to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
                     let q = q_clone.clone();
@@ -161,7 +161,7 @@ async fn handle_llm_response(
                 target_service: "transport-service".to_string(), // Final destination
             };
 
-            queue.publish_event("tts-output", output_event).await?;
+            queue.publish_event("TTS_OUTPUT", output_event).await?;
         }
         Err(e) => {
             error!("TTS synthesis failed: {}", e);
@@ -240,7 +240,7 @@ impl ServiceState for TtsServiceState {
         ));
 
         // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("llm-output").await {
+        if let Ok(queue_metrics) = self.event_queue.get_metrics("LLM_OUTPUT").await {
             metrics.push(format!(
                 "pending_messages {}",
                 queue_metrics.pending_messages

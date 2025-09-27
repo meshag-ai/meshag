@@ -248,10 +248,10 @@ docker-compose logs -f transport-service
 docker-compose logs -f nats
 
 # Execute into container
-docker exec -it meshag-stt-service /bin/bash
-docker exec -it meshag-llm-service /bin/bash
-docker exec -it meshag-tts-service /bin/bash
-docker exec -it meshag-transport-service /bin/bash
+docker exec -it stt-service /bin/bash
+docker exec -it llm-service /bin/bash
+docker exec -it tts-service /bin/bash
+docker exec -it transport-service /bin/bash
 
 # Check service health
 curl http://localhost:8081/ready
@@ -398,9 +398,9 @@ docker exec meshag-stt-service curl http://nats:8222/healthz
 **API Key issues**
 ```bash
 # Check environment variables are loaded
-docker exec meshag-stt-service env | grep OPENAI
-docker exec meshag-transport-service env | grep DAILY
-docker exec meshag-tts-service env | grep ELEVENLABS
+docker exec stt-service env | grep OPENAI
+docker exec transport-service env | grep DAILY
+docker exec tts-service env | grep ELEVENLABS
 
 # Test API connectivity
 docker exec meshag-stt-service curl -H "Authorization: Bearer $OPENAI_API_KEY" https://api.openai.com/v1/models
@@ -418,7 +418,7 @@ cargo check --workspace
 cargo check -p stt-service
 cargo check -p llm-service
 cargo check -p tts-service
-cargo check -p meshag-transport-service
+cargo check -p transport-service
 ```
 
 **Daily.co integration issues**
