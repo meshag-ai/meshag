@@ -35,10 +35,12 @@ axum-extra = "0.8"
 tower = "0.4"
 tokio-tungstenite = { version = "0.20", features = ["rustls-tls-webpki-roots"] }
 futures-util = "0.3"
+url = "2.4"
 dashmap = "5.5"
 once_cell = "1.19"
 prometheus = "0.13"
 axum-xml-up = "0.2"
+http = "1.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

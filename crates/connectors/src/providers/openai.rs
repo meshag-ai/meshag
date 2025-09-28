@@ -21,7 +21,7 @@ impl OpenAIConfig {
         Self {
             api_key,
             base_url: "https://api.openai.com/v1".to_string(),
-            default_llm_model: "gpt-3.5-turbo".to_string(),
+            default_llm_model: "gpt-4o-mini".to_string(),
             default_stt_model: "whisper-1".to_string(),
         }
     }
@@ -210,7 +210,6 @@ impl LlmConnector for OpenAILlmConnector {
     }
 }
 
-/// OpenAI STT (Whisper) Connector
 #[derive(Debug, Clone)]
 pub struct OpenAISttConnector {
     config: OpenAIConfig,
@@ -222,20 +221,6 @@ impl OpenAISttConnector {
         Self {
             config,
             client: reqwest::Client::new(),
-        }
-    }
-
-    fn format_to_mime_type(&self, format: &AudioFormat) -> &'static str {
-        match format {
-            AudioFormat::Wav => "audio/wav",
-            AudioFormat::Mulaw => "audio/x-mulaw",
-        }
-    }
-
-    fn format_to_extension(&self, format: &AudioFormat) -> &'static str {
-        match format {
-            AudioFormat::Wav => "wav",
-            AudioFormat::Mulaw => "mulaw",
         }
     }
 }
@@ -257,62 +242,8 @@ impl SttConnector for OpenAISttConnector {
         Ok(response.status().is_success())
     }
 
-    async fn transcribe(&self, request: SttRequest) -> Result<SttResponse> {
-        let start_time = Instant::now();
-
-        let form = reqwest::multipart::Form::new()
-            .text("model", self.config.default_stt_model.clone())
-            .part(
-                "file",
-                reqwest::multipart::Part::bytes(request.audio_data)
-                    .file_name(format!(
-                        "audio.{}",
-                        self.format_to_extension(&request.format)
-                    ))
-                    .mime_str(self.format_to_mime_type(&request.format))?,
-            );
-
-        let mut form = form;
-        if let Some(language) = request.language {
-            form = form.text("language", language);
-        }
-
-        let response = self
-            .client
-            .post(&format!("{}/audio/transcriptions", self.config.base_url))
-            .header("Authorization", format!("Bearer {}", self.config.api_key))
-            .multipart(form)
-            .send()
-            .await?;
-
-        if !response.status().is_success() {
-            let error_text = response.text().await?;
-            return Err(anyhow!("Whisper API error: {}", error_text));
-        }
-
-        let response_json: serde_json::Value = response.json().await?;
-
-        let text = response_json["text"]
-            .as_str()
-            .ok_or_else(|| anyhow!("Invalid response format from Whisper"))?
-            .to_string();
-
-        let processing_time = start_time.elapsed().as_millis() as u64;
-
-        let mut provider_metadata = HashMap::new();
-        provider_metadata.insert("raw_response".to_string(), response_json);
-
-        Ok(SttResponse {
-            text,
-            confidence: None,        // Whisper doesn't provide confidence scores
-            language_detected: None, // Could be extracted from response if available
-            processing_time_ms: processing_time,
-            provider_metadata,
-        })
-    }
-
     fn supported_formats(&self) -> Vec<AudioFormat> {
-        vec![AudioFormat::Wav, AudioFormat::Mulaw]
+        vec![AudioFormat::Wav]
     }
 
     fn supported_languages(&self) -> Option<Vec<String>> {
@@ -341,6 +272,10 @@ impl SttConnector for OpenAISttConnector {
             },
             "required": ["api_key"]
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

@@ -6,7 +6,7 @@ use meshag_connectors::{
     TransportRequest, TransportResponse, TwilioConfig,
 };
 use meshag_orchestrator::{AgentConfig, ConfigStorage};
-use meshag_service_common::{HealthCheck, ServiceState};
+use meshag_service_common::ServiceState;
 use meshag_shared::{
     EventQueue, MediaEventPayload, ProcessingEvent, StreamConfig, TwilioMediaData,
     TwilioMediaFormat, TwilioStartData,
@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Transport service configuration
 #[derive(Debug, Clone)]
 pub struct TransportServiceConfig {
     pub twilio_account_sid: String,
@@ -46,7 +45,6 @@ impl TransportServiceConfig {
     }
 }
 
-/// Transport service state
 #[derive(Clone)]
 pub struct TransportServiceState {
     pub config: TransportServiceConfig,
@@ -72,7 +70,6 @@ impl TransportServiceState {
         })?);
         tracing::info!("Successfully connected to Valkey");
 
-        // Register Twilio connector if credentials are provided
         if !config.twilio_account_sid.is_empty()
             && !config.twilio_auth_token.is_empty()
             && !config.twilio_phone_number.is_empty()
@@ -123,7 +120,6 @@ impl TransportServiceState {
 
         let response = connector.create_session(transport_request).await?;
 
-        // Store session info
         let session_info = SessionInfo {
             session_id: session_id.clone(),
             room_name: response.room_name.clone(),
@@ -136,7 +132,6 @@ impl TransportServiceState {
 
         self.sessions.insert(session_id.clone(), session_info);
 
-        // Store the provider mapping for this session
         self.session_providers
             .insert(session_id, request.provider.clone());
 
@@ -145,7 +140,6 @@ impl TransportServiceState {
 
     pub async fn get_session(&self, session_id: &str) -> Result<SessionInfo> {
         if let Some(session) = self.sessions.get(session_id) {
-            // Update session info from provider
             if let Some(provider_name) = self.get_provider_for_session(session_id) {
                 if let Some(connector) = self.get_connector(&provider_name) {
                     if let Ok(updated_session) = connector.get_session(session_id).await {
@@ -168,11 +162,9 @@ impl TransportServiceState {
             }
         }
 
-        // Clean up session data
         self.sessions.remove(session_id);
         self.session_providers.remove(session_id);
 
-        // Also clean up any stored configuration for this session
         if let Err(e) = self.delete_config(session_id).await {
             tracing::warn!("Failed to delete config for session {}: {}", session_id, e);
         }
@@ -180,11 +172,9 @@ impl TransportServiceState {
         Ok(())
     }
 
-    /// Join as AI agent and start processing pipeline
     pub async fn join_as_ai_agent(&self, session_id: &str, agent_name: &str) -> Result<()> {
         if let Some(provider_name) = self.get_provider_for_session(session_id) {
             if let Some(connector) = self.get_connector(&provider_name) {
-                // Create participant config for the agent
                 let agent_participant_config = meshag_connectors::ParticipantConfig {
                     name: Some(agent_name.to_string()),
                     is_owner: false,
@@ -197,12 +187,10 @@ impl TransportServiceState {
                     },
                 };
 
-                // Create meeting token for the agent using the connector
                 let agent_token = connector
                     .create_meeting_token(session_id, agent_participant_config.clone())
                     .await?;
 
-                // Start the AI agent processing pipeline
                 self.start_ai_agent_pipeline(session_id, &agent_token, &provider_name)
                     .await?;
 
@@ -225,20 +213,17 @@ impl TransportServiceState {
         }
     }
 
-    /// Start the AI agent processing pipeline
     async fn start_ai_agent_pipeline(
         &self,
         session_id: &str,
         agent_token: &str,
         provider_name: &str,
     ) -> Result<()> {
-        // Load configuration for this session
         let _config = self
             .get_config(session_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("No configuration found for session: {}", session_id))?;
 
-        // Create orchestrator router for this session
         let mut router = meshag_orchestrator::ServiceRouter::new(
             &self.config.valkey_url,
             (*self.event_queue).clone(),
@@ -246,22 +231,15 @@ impl TransportServiceState {
         )
         .await?;
 
-        // Load the configuration
         router.load_config(session_id).await?;
-
-        // Start background tasks for the AI agent based on provider
 
         match provider_name {
             "daily" => {
-                // For Daily.co, the connector will handle WebSocket connections internally
-                // The transport service no longer manages Daily.co specific WebSocket handling
                 tracing::info!(
                     "Daily.co provider detected - connector handles WebSocket internally"
                 );
             }
             "twilio" => {
-                // For Twilio, we don't need WebSocket handling as it uses phone calls
-                // The audio processing will be handled through webhooks
                 tracing::info!("Twilio provider detected - audio processing via webhooks");
             }
             _ => {
@@ -272,14 +250,12 @@ impl TransportServiceState {
             }
         }
 
-        // Send initial greeting
         self.send_ai_greeting(session_id, agent_token, &router)
             .await?;
 
         Ok(())
     }
 
-    /// Send AI greeting when user joins
     async fn send_ai_greeting(
         &self,
         session_id: &str,
@@ -288,10 +264,8 @@ impl TransportServiceState {
     ) -> Result<()> {
         tracing::info!("AI agent sending greeting for session: {}", session_id);
 
-        // Generate greeting text
         let greeting_text = "Hello! I'm your AI assistant. How can I help you today?";
 
-        // Route using config-based pipeline
         if let Err(e) = router
             .route_to_next(serde_json::json!({"text": greeting_text}), session_id)
             .await
@@ -303,8 +277,6 @@ impl TransportServiceState {
     }
 
     pub async fn list_sessions(&self) -> Result<Vec<SessionInfo>> {
-        // For now, just return sessions from our local cache
-        // In a real implementation, you'd also query the providers
         let sessions: Vec<SessionInfo> = self
             .sessions
             .iter()
@@ -315,43 +287,33 @@ impl TransportServiceState {
     }
 
     fn get_provider_for_session(&self, session_id: &str) -> Option<String> {
-        // Look up the provider for this session
         if let Some(provider) = self.session_providers.get(session_id) {
             Some(provider.clone())
         } else {
-            // If session not found in cache, return None
-            // This handles cases where sessions might have been created before
-            // the provider mapping was implemented
             None
         }
     }
 
-    /// Store configuration for a session
     pub async fn store_config(&self, session_id: &str, config: &AgentConfig) -> Result<()> {
         self.config_storage.store_config(session_id, config).await
     }
 
-    /// Retrieve configuration for a session
     pub async fn get_config(&self, session_id: &str) -> Result<Option<AgentConfig>> {
         self.config_storage.get_config(session_id).await
     }
 
-    /// Delete configuration for a session
     pub async fn delete_config(&self, session_id: &str) -> Result<()> {
         self.config_storage.delete_config(session_id).await
     }
 
-    /// List all stored configurations
     pub async fn list_configs(&self) -> Result<Vec<String>> {
         self.config_storage.list_configs().await
     }
 
-    /// Check if configuration exists for a session
     pub async fn config_exists(&self, session_id: &str) -> Result<bool> {
         self.config_storage.config_exists(session_id).await
     }
 
-    /// Get session statistics
     pub fn get_session_stats(&self) -> SessionStats {
         let total_sessions = self.sessions.len();
         let active_sessions = self
@@ -380,12 +342,10 @@ impl TransportServiceState {
         }
     }
 
-    /// Check if a session exists
     pub fn session_exists(&self, session_id: &str) -> bool {
         self.sessions.contains_key(session_id)
     }
 
-    /// Get all session IDs
     pub fn get_session_ids(&self) -> Vec<String> {
         self.sessions
             .iter()
@@ -393,7 +353,6 @@ impl TransportServiceState {
             .collect()
     }
 
-    /// Get sessions by provider
     pub fn get_sessions_by_provider(&self, provider: &str) -> Vec<String> {
         self.session_providers
             .iter()
@@ -402,7 +361,6 @@ impl TransportServiceState {
             .collect()
     }
 
-    /// Get session count by status
     pub fn get_session_count_by_status(&self, status: meshag_connectors::SessionStatus) -> usize {
         self.sessions
             .iter()
@@ -412,13 +370,6 @@ impl TransportServiceState {
             .count()
     }
 
-    /// Check if service is healthy (all dependencies available)
-    pub async fn is_service_healthy(&self) -> bool {
-        let health_checks = self.is_ready().await;
-        health_checks.iter().all(|check| check.status == "healthy")
-    }
-
-    /// Read message from WebSocket connection via connector
     pub async fn read_websocket_message(
         &self,
         session_id: &str,
@@ -449,7 +400,6 @@ impl TransportServiceState {
         }
     }
 
-    /// Write message to WebSocket connection via connector
     pub async fn write_websocket_message(
         &self,
         session_id: &str,
@@ -481,7 +431,6 @@ impl TransportServiceState {
         }
     }
 
-    /// Publish media event to STT service via NATS
     pub async fn publish_media_event(
         &self,
         session_id: &str,
@@ -494,7 +443,6 @@ impl TransportServiceState {
         media_format: TwilioMediaFormat,
     ) -> Result<String> {
         let media_payload = MediaEventPayload {
-            session_id: session_id.to_string(),
             call_sid: call_sid.to_string(),
             stream_sid: stream_sid.to_string(),
             track: track.to_string(),
@@ -505,6 +453,7 @@ impl TransportServiceState {
         };
 
         let event = ProcessingEvent {
+            session_id: session_id.to_string(),
             conversation_id: Uuid::new_v4(), // Generate new conversation ID for each media event
             correlation_id: Uuid::new_v4(),
             event_type: "media_input".to_string(),
@@ -514,22 +463,48 @@ impl TransportServiceState {
             target_service: "stt-service".to_string(),
         };
 
-        let subject = "AUDIO_INPUT";
-        let message_id = self.event_queue.publish_event(subject, event).await?;
-
-        // tracing::info!(
-        //     session_id = %session_id,
-        //     call_sid = %call_sid,
-        //     track = %track,
-        //     chunk = %chunk,
-        //     message_id = %message_id,
-        //     "Published media event to STT service"
-        // );
+        let subject = format!("AUDIO_INPUT.session.{}", session_id);
+        let message_id = self.event_queue.publish_event(&subject, event).await?;
 
         Ok(message_id)
     }
 
-    /// Start consuming response events and writing them to WebSocket
+    pub async fn publish_session_start_event(&self, session_id: &str) -> Result<String> {
+        let event = ProcessingEvent {
+            session_id: session_id.to_string(),
+            conversation_id: Uuid::new_v4(), // Generate new conversation ID for each media event
+            correlation_id: Uuid::new_v4(),
+            event_type: "session_start".to_string(),
+            payload: serde_json::Value::Null,
+            timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+            source_service: "transport-service".to_string(),
+            target_service: "stt-service".to_string(),
+        };
+
+        let subject = format!("AUDIO_INPUT.session.{}", session_id);
+        let message_id = self.event_queue.publish_event(&subject, event).await?;
+
+        Ok(message_id)
+    }
+
+    pub async fn publish_session_end_event(&self, session_id: &str) -> Result<String> {
+        let event = ProcessingEvent {
+            session_id: session_id.to_string(),
+            conversation_id: Uuid::new_v4(), // Generate new conversation ID for each media event
+            correlation_id: Uuid::new_v4(),
+            event_type: "session_end".to_string(),
+            payload: serde_json::Value::Null,
+            timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+            source_service: "transport-service".to_string(),
+            target_service: "stt-service".to_string(),
+        };
+
+        let subject = format!("AUDIO_INPUT.session.{}", session_id);
+        let message_id = self.event_queue.publish_event(&subject, event).await?;
+
+        Ok(message_id)
+    }
+
     pub async fn start_response_consumer(&self) -> Result<()> {
         let event_queue = self.event_queue.clone();
         let session_providers = self.session_providers.clone();
@@ -546,7 +521,6 @@ impl TransportServiceState {
                 async move {
                     if let Some(payload) = event.payload.get("session_id") {
                         if let Some(session_id) = payload.as_str() {
-                            // Parse response payload
                             if let Ok(response_payload) = serde_json::from_value::<ResponseEventPayload>(event.payload.clone()) {
                                 tracing::info!(
                                     session_id = %session_id,
@@ -554,14 +528,12 @@ impl TransportServiceState {
                                     "Received response event for WebSocket"
                                 );
 
-                                // Write response to WebSocket
                                 if let Some(provider_entry) = session_providers.get(session_id) {
                                     let provider_name = provider_entry.value().clone();
                                     if let Some(connector) = connectors.get(&provider_name) {
                                         match provider_name.as_str() {
                                             "twilio" => {
                                                 if let Some(twilio_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::twilio::TwilioTransportConnector>() {
-                                                    // Create Twilio media message for outbound audio
                                                     let media_message = serde_json::json!({
                                                         "event": "media",
                                                         "streamSid": response_payload.call_sid,
@@ -609,7 +581,6 @@ impl TransportServiceState {
         Ok(())
     }
 
-    /// Check if WebSocket is connected via connector
     pub async fn is_websocket_connected(&self, session_id: &str) -> Result<bool> {
         if let Some(provider_name) = self.get_provider_for_session(session_id) {
             if let Some(connector) = self.get_connector(&provider_name) {
@@ -644,94 +615,11 @@ impl ServiceState for TransportServiceState {
         "transport-service".to_string()
     }
 
-    async fn is_ready(&self) -> Vec<HealthCheck> {
-        let mut checks = vec![];
-
-        // Check NATS connection
-        let nats_healthy = self.event_queue.health_check().await.unwrap_or(false);
-        checks.push(HealthCheck {
-            name: "nats".to_string(),
-            status: if nats_healthy {
-                "healthy".to_string()
-            } else {
-                "unhealthy".to_string()
-            },
-            message: Some(if nats_healthy {
-                "Connected".to_string()
-            } else {
-                "Disconnected".to_string()
-            }),
-        });
-
-        // Check connectors
-        let connector_names: Vec<String> = self
-            .connectors
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect();
-        for connector_name in connector_names {
-            if let Some(connector) = self.connectors.get(&connector_name) {
-                let healthy = connector.health_check().await.unwrap_or(false);
-                checks.push(HealthCheck {
-                    name: format!("connector_{}", connector_name),
-                    status: if healthy {
-                        "healthy".to_string()
-                    } else {
-                        "unhealthy".to_string()
-                    },
-                    message: Some(if healthy {
-                        "Ready".to_string()
-                    } else {
-                        "Not ready".to_string()
-                    }),
-                });
-            }
-        }
-
-        checks
-    }
-
     fn event_queue(&self) -> &EventQueue {
         &self.event_queue
     }
-
-    async fn get_metrics(&self) -> Vec<String> {
-        let mut metrics = vec![];
-
-        metrics.push(format!("active_sessions {}", self.sessions.len()));
-        metrics.push(format!("registered_connectors {}", self.connectors.len()));
-        metrics.push(format!(
-            "session_provider_mappings {}",
-            self.session_providers.len()
-        ));
-
-        // Add provider-specific session counts
-        let mut provider_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for provider in self.session_providers.iter() {
-            *provider_counts.entry(provider.value().clone()).or_insert(0) += 1;
-        }
-        for (provider, count) in provider_counts {
-            metrics.push(format!("sessions_by_provider_{}  {}", provider, count));
-        }
-
-        // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("transport-input").await {
-            metrics.push(format!(
-                "pending_messages {}",
-                queue_metrics.pending_messages
-            ));
-            metrics.push(format!(
-                "delivered_messages {}",
-                queue_metrics.delivered_messages
-            ));
-        }
-
-        metrics
-    }
 }
 
-/// Request to create a new session
 #[derive(Debug, serde::Deserialize)]
 pub struct CreateSessionRequest {
     pub provider: String,
@@ -740,7 +628,6 @@ pub struct CreateSessionRequest {
     pub options: HashMap<String, serde_json::Value>,
 }
 
-/// Session statistics
 #[derive(Debug, serde::Serialize)]
 pub struct SessionStats {
     pub total_sessions: usize,
@@ -748,7 +635,6 @@ pub struct SessionStats {
     pub provider_counts: HashMap<String, usize>,
 }
 
-/// WebSocket message types
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type")]
 pub enum WebSocketMessage {
@@ -790,7 +676,6 @@ pub enum WebSocketMessage {
     },
 }
 
-/// Response event payload for WebSocket
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseEventPayload {
     pub session_id: String,
@@ -800,7 +685,6 @@ pub struct ResponseEventPayload {
     pub metadata: HashMap<String, String>,
 }
 
-/// WebSocket connection state
 pub struct WebSocketConnection {
     pub session_id: Option<String>,
     pub connected_at: chrono::DateTime<chrono::Utc>,

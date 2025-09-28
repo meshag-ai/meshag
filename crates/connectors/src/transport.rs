@@ -83,37 +83,27 @@ pub struct ParticipantInfo {
     pub permissions: ParticipantPermissions,
 }
 
-/// Generic transport connector trait that all providers must implement
 #[async_trait]
 pub trait TransportConnector: Send + Sync {
-    /// Unique identifier for this connector
     fn provider_name(&self) -> &'static str;
 
-    /// Get a reference to the underlying type for downcasting
     fn as_any(&self) -> &dyn std::any::Any;
 
-    /// Check if the connector is healthy and ready to process requests
     async fn health_check(&self) -> Result<bool>;
 
-    /// Create a new session/room
     async fn create_session(&self, request: TransportRequest) -> Result<TransportResponse>;
 
-    /// Get session information
     async fn get_session(&self, session_id: &str) -> Result<SessionInfo>;
 
-    /// End a session
     async fn end_session(&self, session_id: &str) -> Result<()>;
 
-    /// List active sessions
     async fn list_sessions(&self) -> Result<Vec<SessionInfo>>;
 
-    /// Create a meeting token for a participant
     async fn create_meeting_token(
         &self,
         session_id: &str,
         participant: ParticipantConfig,
     ) -> Result<String>;
 
-    /// Get provider-specific configuration schema
     fn config_schema(&self) -> serde_json::Value;
 }

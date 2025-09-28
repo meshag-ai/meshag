@@ -60,10 +60,11 @@ impl LlmService {
 
         let service = Arc::new(self.clone());
         let q_clone = queue.clone();
+        let subject = "STT_OUTPUT.session.*";
         queue
             .consume_events(
                 StreamConfig::stt_output(),
-                "STT_OUTPUT".to_string(),
+                subject.to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
                     let q = q_clone.clone();
@@ -133,8 +134,7 @@ async fn handle_text_event(
     event: ProcessingEvent,
 ) -> Result<()> {
     match event.event_type.as_str() {
-        "transcription_complete" => handle_transcription(service, queue, event).await?,
-        "conversation_start" => handle_conversation_start(service, event).await?,
+        "transcription_output" => handle_transcription(service, queue, event).await?,
         "conversation_end" => handle_conversation_end(service, event).await?,
         _ => error!("Unknown event type: {}", event.event_type),
     }
@@ -146,12 +146,11 @@ async fn handle_transcription(
     queue: EventQueue,
     event: ProcessingEvent,
 ) -> Result<()> {
-    let text = event.payload["text"]
+    let text = event.payload["transcription"]["text"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Missing text in transcription payload"))?
         .to_string();
 
-    // Add user message to conversation
     let user_message = ChatMessage {
         role: MessageRole::User,
         content: text,
@@ -161,7 +160,6 @@ async fn handle_transcription(
         .add_message(event.conversation_id, user_message)
         .await;
 
-    // Get connector preference from event or use default
     let connector_name = event.payload["connector"].as_str();
     let connector = match service.get_connector(connector_name).await {
         Some(c) => c,
@@ -171,10 +169,8 @@ async fn handle_transcription(
         }
     };
 
-    // Get conversation history
     let messages = service.get_conversation(event.conversation_id).await;
 
-    // Prepare LLM request
     let llm_request = LlmRequest {
         messages,
         model: event.payload["model"].as_str().map(|s| s.to_string()),
@@ -186,10 +182,8 @@ async fn handle_transcription(
         options: HashMap::new(),
     };
 
-    // Generate response
     match connector.generate(llm_request).await {
         Ok(response) => {
-            // Add assistant message to conversation
             let assistant_message = ChatMessage {
                 role: MessageRole::Assistant,
                 content: response.text.clone(),
@@ -200,6 +194,7 @@ async fn handle_transcription(
                 .await;
 
             let output_event = ProcessingEvent {
+                session_id: event.session_id,
                 conversation_id: event.conversation_id,
                 correlation_id: event.correlation_id,
                 event_type: "llm_response_complete".to_string(),
@@ -225,30 +220,12 @@ async fn handle_transcription(
     Ok(())
 }
 
-async fn handle_conversation_start(service: Arc<LlmService>, event: ProcessingEvent) -> Result<()> {
-    // Add system message if provided
-    if let Some(system_prompt) = event.payload["system_prompt"].as_str() {
-        let system_message = ChatMessage {
-            role: MessageRole::System,
-            content: system_prompt.to_string(),
-            timestamp: chrono::Utc::now(),
-        };
-        service
-            .add_message(event.conversation_id, system_message)
-            .await;
-    }
-
-    info!(conversation_id = %event.conversation_id, "LLM conversation started");
-    Ok(())
-}
-
 async fn handle_conversation_end(service: Arc<LlmService>, event: ProcessingEvent) -> Result<()> {
     service.clear_conversation(event.conversation_id).await;
     info!(conversation_id = %event.conversation_id, "LLM conversation ended");
     Ok(())
 }
 
-// Service state for HTTP handlers
 pub struct LlmServiceState {
     pub event_queue: EventQueue,
     pub llm_service: LlmService,
@@ -260,76 +237,7 @@ impl ServiceState for LlmServiceState {
         "llm-service".to_string()
     }
 
-    async fn is_ready(&self) -> Vec<HealthCheck> {
-        let mut checks = vec![];
-
-        // Check NATS connection
-        let nats_healthy = self.event_queue.health_check().await.unwrap_or(false);
-        checks.push(HealthCheck {
-            name: "nats".to_string(),
-            status: if nats_healthy {
-                "healthy".to_string()
-            } else {
-                "unhealthy".to_string()
-            },
-            message: Some(if nats_healthy {
-                "Connected".to_string()
-            } else {
-                "Disconnected".to_string()
-            }),
-        });
-
-        // Check connectors
-        let connector_health = self.llm_service.health_check_connectors().await;
-        for (name, healthy) in connector_health {
-            checks.push(HealthCheck {
-                name: format!("connector_{}", name),
-                status: if healthy {
-                    "healthy".to_string()
-                } else {
-                    "unhealthy".to_string()
-                },
-                message: Some(if healthy {
-                    "Ready".to_string()
-                } else {
-                    "Not ready".to_string()
-                }),
-            });
-        }
-
-        checks
-    }
-
     fn event_queue(&self) -> &EventQueue {
         &self.event_queue
-    }
-
-    async fn get_metrics(&self) -> Vec<String> {
-        let mut metrics = vec![];
-
-        let connectors = self.llm_service.list_connectors().await;
-        let connector_health = self.llm_service.health_check_connectors().await;
-        let active_conversations = self.llm_service.active_conversations().await;
-
-        metrics.push(format!("active_connectors {}", connectors.len()));
-        metrics.push(format!(
-            "healthy_connectors {}",
-            connector_health.values().filter(|&&h| h).count()
-        ));
-        metrics.push(format!("active_conversations {}", active_conversations));
-
-        // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("STT_OUTPUT").await {
-            metrics.push(format!(
-                "pending_messages {}",
-                queue_metrics.pending_messages
-            ));
-            metrics.push(format!(
-                "delivered_messages {}",
-                queue_metrics.delivered_messages
-            ));
-        }
-
-        metrics
     }
 }

@@ -43,21 +43,15 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
-/// Generic LLM connector trait that all providers must implement
 #[async_trait]
 pub trait LlmConnector: Send + Sync {
-    /// Unique identifier for this connector
     fn provider_name(&self) -> &'static str;
 
-    /// Check if the connector is healthy and ready to process requests
     async fn health_check(&self) -> Result<bool>;
 
-    /// Generate a response based on the conversation
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse>;
 
-    /// Get available models
     async fn available_models(&self) -> Result<Vec<String>>;
 
-    /// Get provider-specific configuration schema
     fn config_schema(&self) -> serde_json::Value;
 }

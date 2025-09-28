@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use meshag_connectors::{TtsConnector, TtsRequest};
-use meshag_service_common::{HealthCheck, ServiceState};
+use meshag_service_common::ServiceState;
 use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
 use serde_json::json;
 use std::collections::HashMap;
@@ -60,7 +60,7 @@ impl TtsService {
         queue
             .consume_events(
                 StreamConfig::llm_output(),
-                "LLM_OUTPUT".to_string(),
+                "LLM_OUTPUT.session.*".to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
                     let q = q_clone.clone();
@@ -119,7 +119,6 @@ async fn handle_llm_response(
         .ok_or_else(|| anyhow::anyhow!("Missing text in LLM response payload"))?
         .to_string();
 
-    // Get connector preference from event or use default
     let connector_name = event.payload["connector"].as_str();
     let connector = match service.get_connector(connector_name).await {
         Some(c) => c,
@@ -129,7 +128,6 @@ async fn handle_llm_response(
         }
     };
 
-    // Prepare TTS request
     let tts_request = TtsRequest {
         text,
         voice_id: event.payload["voice_id"].as_str().map(|s| s.to_string()),
@@ -140,10 +138,10 @@ async fn handle_llm_response(
         options: HashMap::new(),
     };
 
-    // Synthesize speech
     match connector.synthesize(tts_request).await {
         Ok(response) => {
             let output_event = ProcessingEvent {
+                session_id: event.session_id,
                 conversation_id: event.conversation_id,
                 correlation_id: event.correlation_id,
                 event_type: "tts_synthesis_complete".to_string(),
@@ -158,10 +156,11 @@ async fn handle_llm_response(
                 }),
                 timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
                 source_service: "tts-service".to_string(),
-                target_service: "transport-service".to_string(), // Final destination
+                target_service: "transport-service".to_string(),
             };
 
-            queue.publish_event("TTS_OUTPUT", output_event).await?;
+            let subject = format!("TTS_OUTPUT.session.{}", event.conversation_id);
+            queue.publish_event(&subject, output_event).await?;
         }
         Err(e) => {
             error!("TTS synthesis failed: {}", e);
@@ -171,7 +170,6 @@ async fn handle_llm_response(
     Ok(())
 }
 
-// Service state for HTTP handlers
 pub struct TtsServiceState {
     pub event_queue: EventQueue,
     pub tts_service: TtsService,
@@ -183,74 +181,7 @@ impl ServiceState for TtsServiceState {
         "tts-service".to_string()
     }
 
-    async fn is_ready(&self) -> Vec<HealthCheck> {
-        let mut checks = vec![];
-
-        // Check NATS connection
-        let nats_healthy = self.event_queue.health_check().await.unwrap_or(false);
-        checks.push(HealthCheck {
-            name: "nats".to_string(),
-            status: if nats_healthy {
-                "healthy".to_string()
-            } else {
-                "unhealthy".to_string()
-            },
-            message: Some(if nats_healthy {
-                "Connected".to_string()
-            } else {
-                "Disconnected".to_string()
-            }),
-        });
-
-        // Check connectors
-        let connector_health = self.tts_service.health_check_connectors().await;
-        for (name, healthy) in connector_health {
-            checks.push(HealthCheck {
-                name: format!("connector_{}", name),
-                status: if healthy {
-                    "healthy".to_string()
-                } else {
-                    "unhealthy".to_string()
-                },
-                message: Some(if healthy {
-                    "Ready".to_string()
-                } else {
-                    "Not ready".to_string()
-                }),
-            });
-        }
-
-        checks
-    }
-
     fn event_queue(&self) -> &EventQueue {
         &self.event_queue
-    }
-
-    async fn get_metrics(&self) -> Vec<String> {
-        let mut metrics = vec![];
-
-        let connectors = self.tts_service.list_connectors().await;
-        let connector_health = self.tts_service.health_check_connectors().await;
-
-        metrics.push(format!("active_connectors {}", connectors.len()));
-        metrics.push(format!(
-            "healthy_connectors {}",
-            connector_health.values().filter(|&&h| h).count()
-        ));
-
-        // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("LLM_OUTPUT").await {
-            metrics.push(format!(
-                "pending_messages {}",
-                queue_metrics.pending_messages
-            ));
-            metrics.push(format!(
-                "delivered_messages {}",
-                queue_metrics.delivered_messages
-            ));
-        }
-
-        metrics
     }
 }
