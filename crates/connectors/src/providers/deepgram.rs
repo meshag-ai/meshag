@@ -1,7 +1,74 @@
 use crate::stt::{AudioFormat, SttConnector, SttRequest, SttResponse};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
+use reqwest::header::HeaderValue;
+use serde::Deserialize;
 use serde_json::json;
+use std::time::Instant;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio_tungstenite::{
+    connect_async, tungstenite::client::IntoClientRequest, tungstenite::Message,
+};
+use url::Url;
+
+/// Deepgram WebSocket response structures
+#[derive(Debug, Deserialize)]
+struct DeepgramResponse {
+    #[serde(rename = "type")]
+    response_type: String,
+    channel: Option<DeepgramChannel>,
+    duration: Option<f64>,
+    is_final: Option<bool>,
+    speech_final: Option<bool>,
+    metadata: Option<DeepgramMetadata>,
+    start: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramChannel {
+    alternatives: Vec<DeepgramAlternative>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramAlternative {
+    confidence: f32,
+    transcript: String,
+    words: Option<Vec<DeepgramWord>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramWord {
+    confidence: f32,
+    end: f64,
+    punctuated_word: String,
+    start: f64,
+    word: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramMetadata {
+    model_info: Option<DeepgramModelInfo>,
+    model_uuid: Option<String>,
+    request_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramModelInfo {
+    name: String,
+    version: String,
+    arch: String,
+}
+
+/// Session WebSocket connection for streaming audio
+#[derive(Debug)]
+pub struct SessionConnection {
+    pub session_id: String,
+    pub write_tx: mpsc::UnboundedSender<Vec<u8>>,
+    pub transcription_rx: mpsc::UnboundedReceiver<SttResponse>,
+    pub _handle: tokio::task::JoinHandle<()>,
+}
 
 /// Deepgram provider configuration
 #[derive(Debug, Clone)]
@@ -32,10 +99,11 @@ impl DeepgramConfig {
 }
 
 /// Deepgram STT Connector
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeepgramSttConnector {
     config: DeepgramConfig,
     client: reqwest::Client,
+    pub sessions: Arc<RwLock<HashMap<String, Arc<Mutex<SessionConnection>>>>>,
 }
 
 impl DeepgramSttConnector {
@@ -43,6 +111,219 @@ impl DeepgramSttConnector {
         Self {
             config,
             client: reqwest::Client::new(),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    /// Convert AudioFormat to Deepgram encoding parameter
+    fn get_encoding(&self, format: &AudioFormat) -> &'static str {
+        match format {
+            AudioFormat::Wav => "linear16",
+            AudioFormat::Mulaw => "mulaw",
+        }
+    }
+
+    pub async fn create_session(
+        &self,
+        session_id: String,
+        sample_rate: u32,
+        channels: u32,
+        format: AudioFormat,
+        language: Option<String>,
+    ) -> Result<()> {
+        let mut ws_url = format!(
+            "wss://api.deepgram.com/v1/listen?model={}&encoding={}&sample_rate={}&channels={}&interim_results=true&punctuate=true&vad_events=true",
+            self.config.default_model,
+            self.get_encoding(&format),
+            sample_rate,
+            channels
+        );
+
+        if let Some(lang) = &language {
+            ws_url.push_str(&format!("&language={}", lang));
+        }
+
+        println!("WebSocket URL: {}", ws_url);
+
+        let mut url = ws_url.into_client_request()?;
+        let headers = url.headers_mut();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Token {}", self.config.api_key))?,
+        );
+
+        let (ws_stream, _response) = connect_async(url)
+            .await
+            .map_err(|e| anyhow!("Failed to connect to Deepgram: {}", e))?;
+
+        let (write, read) = ws_stream.split();
+
+        let (write_tx, mut write_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (transcription_tx, transcription_rx) = mpsc::unbounded_channel::<SttResponse>();
+
+        let session_id_clone = session_id.clone();
+
+        let handle = tokio::spawn(async move {
+            let mut write = write;
+            let mut read = read;
+
+            let write_task = tokio::spawn(async move {
+                while let Some(audio_data) = write_rx.recv().await {
+                    if let Err(e) = write.send(Message::Binary(audio_data)).await {
+                        tracing::error!("Failed to send audio data to Deepgram: {}", e);
+                        break;
+                    }
+                }
+            });
+
+            let read_task = tokio::spawn(async move {
+                while let Some(msg) = read.next().await {
+                    match msg {
+                        Ok(Message::Text(text)) => {
+                            if let Ok(response) = serde_json::from_str::<DeepgramResponse>(&text) {
+                                println!("Response: {:?}", response);
+                                match response.response_type.as_str() {
+                                    "Results" => {
+                                        if let Some(channel) = response.channel {
+                                            if let Some(alternative) = channel.alternatives.first()
+                                            {
+                                                let mut provider_metadata = HashMap::new();
+
+                                                // Store metadata
+                                                if let Some(metadata) = response.metadata {
+                                                    if let Some(model_info) = metadata.model_info {
+                                                        provider_metadata.insert(
+                                                            "model_name".to_string(),
+                                                            json!(model_info.name),
+                                                        );
+                                                        provider_metadata.insert(
+                                                            "model_version".to_string(),
+                                                            json!(model_info.version),
+                                                        );
+                                                    }
+                                                    if let Some(request_id) = metadata.request_id {
+                                                        provider_metadata.insert(
+                                                            "request_id".to_string(),
+                                                            json!(request_id),
+                                                        );
+                                                    }
+                                                }
+
+                                                let stt_response = SttResponse {
+                                                    text: alternative.transcript.clone(),
+                                                    confidence: Some(alternative.confidence),
+                                                    language_detected: None,
+                                                    processing_time_ms: 0, // Real-time streaming
+                                                    provider_metadata,
+                                                };
+
+                                                if let Err(e) = transcription_tx.send(stt_response)
+                                                {
+                                                    tracing::error!(
+                                                        "Failed to send transcription: {}",
+                                                        e
+                                                    );
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "Metadata" => {
+                                        // Handle metadata response if needed
+                                    }
+                                    _ => {
+                                        tracing::debug!(
+                                            "Received response type: {}",
+                                            response.response_type
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Ok(Message::Close(_)) => {
+                            tracing::info!("WebSocket closed for session: {}", session_id_clone);
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "WebSocket error for session {}: {}",
+                                session_id_clone,
+                                e
+                            );
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            tokio::select! {
+                _ = write_task => {},
+                _ = read_task => {},
+            }
+        });
+
+        // Create session connection
+        let session_conn = SessionConnection {
+            session_id: session_id.clone(),
+            write_tx,
+            transcription_rx,
+            _handle: handle,
+        };
+
+        // Store session
+        let mut sessions = self.sessions.write().await;
+        sessions.insert(session_id, Arc::new(Mutex::new(session_conn)));
+
+        Ok(())
+    }
+
+    /// Send audio data to an existing session
+    pub async fn send_audio(&self, session_id: &str, audio_data: Vec<u8>) -> Result<()> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            let session = session.lock().await;
+            session
+                .write_tx
+                .send(audio_data)
+                .map_err(|e| anyhow!("Failed to send audio data: {}", e))?;
+            Ok(())
+        } else {
+            Err(anyhow!("Session not found: {}", session_id))
+        }
+    }
+
+    /// Get transcription from a session (non-blocking)
+    pub async fn get_transcription(&self, session_id: &str) -> Result<Option<SttResponse>> {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            let mut session = session.lock().await;
+            Ok(session.transcription_rx.try_recv().ok())
+        } else {
+            Err(anyhow!("Session not found: {}", session_id))
+        }
+    }
+
+    /// Close a session
+    pub async fn close_session(&self, session_id: &str) -> Result<()> {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.remove(session_id) {
+            let session = session.lock().await;
+            session._handle.abort();
+            tracing::info!("Closed session: {}", session_id);
+            Ok(())
+        } else {
+            Err(anyhow!("Session not found: {}", session_id))
+        }
+    }
+}
+
+impl Clone for DeepgramSttConnector {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config.clone(),
+            client: self.client.clone(),
+            sessions: Arc::clone(&self.sessions),
         }
     }
 }
@@ -54,13 +335,23 @@ impl SttConnector for DeepgramSttConnector {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        // TODO: Implement Deepgram health check
-        Ok(true)
-    }
+        // Test WebSocket connection to Deepgram
+        let ws_url = format!(
+            "wss://api.deepgram.com/v1/listen?model={}",
+            self.config.default_model
+        );
+        let url = Url::parse(&ws_url).map_err(|e| anyhow!("Invalid WebSocket URL: {}", e))?;
 
-    async fn transcribe(&self, _request: SttRequest) -> Result<SttResponse> {
-        // TODO: Implement Deepgram transcription
-        todo!("Deepgram transcription not yet implemented")
+        match connect_async(url).await {
+            Ok((_ws_stream, _response)) => {
+                // Connection successful, close it immediately
+                Ok(true)
+            }
+            Err(e) => {
+                tracing::warn!("Deepgram health check failed: {}", e);
+                Ok(false)
+            }
+        }
     }
 
     fn supported_formats(&self) -> Vec<AudioFormat> {
@@ -93,6 +384,10 @@ impl SttConnector for DeepgramSttConnector {
             "required": ["api_key"]
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// Factory functions for Deepgram connectors
@@ -100,7 +395,7 @@ pub struct Deepgram;
 
 impl Deepgram {
     /// Create Deepgram STT connector
-    pub fn stt_connector(config: DeepgramConfig) -> Box<dyn SttConnector> {
-        Box::new(DeepgramSttConnector::new(config))
+    pub fn stt_connector(config: DeepgramConfig) -> Arc<dyn SttConnector> {
+        Arc::new(DeepgramSttConnector::new(config))
     }
 }

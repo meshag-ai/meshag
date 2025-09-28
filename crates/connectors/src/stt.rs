@@ -31,24 +31,17 @@ pub enum AudioFormat {
     Mulaw,
 }
 
-/// Generic STT connector trait that all providers must implement
 #[async_trait]
 pub trait SttConnector: Send + Sync {
-    /// Unique identifier for this connector
     fn provider_name(&self) -> &'static str;
 
-    /// Check if the connector is healthy and ready to process requests
     async fn health_check(&self) -> Result<bool>;
 
-    /// Transcribe audio data to text
-    async fn transcribe(&self, request: SttRequest) -> Result<SttResponse>;
-
-    /// Get supported audio formats
     fn supported_formats(&self) -> Vec<AudioFormat>;
 
-    /// Get supported languages (None means all languages supported)
     fn supported_languages(&self) -> Option<Vec<String>>;
 
-    /// Get provider-specific configuration schema
     fn config_schema(&self) -> serde_json::Value;
+
+    fn as_any(&self) -> &dyn std::any::Any;
 }

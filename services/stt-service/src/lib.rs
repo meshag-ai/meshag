@@ -1,21 +1,48 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use meshag_connectors::{AudioFormat, SttConnector, SttRequest};
+use meshag_connectors::providers::deepgram::DeepgramSttConnector;
+use meshag_connectors::{AudioFormat, SttConnector};
 use meshag_orchestrator::ServiceRouter;
 use meshag_service_common::{HealthCheck, ServiceState};
 use meshag_shared::MediaEventPayload;
-use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
+use meshag_shared::{EventQueue, ProcessingEvent};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info};
+use uuid::Uuid;
+
+/// Session state for managing early media events
+#[derive(Debug)]
+pub struct SessionState {
+    pub session_id: String,
+    pub is_established: bool,
+    pub audio_format: Option<AudioFormat>,
+    pub sample_rate: Option<u32>,
+    pub channels: Option<u32>,
+    pub buffered_audio: Vec<Vec<u8>>,
+}
+
+impl SessionState {
+    pub fn new(session_id: String) -> Self {
+        Self {
+            session_id,
+            is_established: false,
+            audio_format: None,
+            sample_rate: None,
+            channels: None,
+            buffered_audio: Vec::new(),
+        }
+    }
+}
 
 pub struct SttService {
     connectors: Arc<RwLock<HashMap<String, Arc<dyn SttConnector>>>>,
     default_connector: Arc<RwLock<Option<String>>>,
     router: Arc<RwLock<Option<ServiceRouter>>>,
+    session_states: Arc<RwLock<HashMap<String, Arc<Mutex<SessionState>>>>>,
 }
 
 impl SttService {
@@ -24,6 +51,7 @@ impl SttService {
             connectors: Arc::new(RwLock::new(HashMap::new())),
             default_connector: Arc::new(RwLock::new(None)),
             router: Arc::new(RwLock::new(None)),
+            session_states: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -61,18 +89,35 @@ impl SttService {
         info!("STT service starting to consume from AUDIO_INPUT");
 
         let service = Arc::new(self.clone());
-        let q_clone = queue.clone();
-        queue
-            .consume_events(
-                StreamConfig::audio_input(),
-                "AUDIO_INPUT".to_string(),
-                move |event| {
-                    let svc = Arc::clone(&service);
-                    let q = q_clone.clone();
-                    async move { handle_audio_event(svc, q, event).await }
-                },
-            )
-            .await
+        let queue_clone = queue.clone();
+
+        tokio::spawn(async move {
+            let q_clone = queue_clone.clone();
+            let stream_config = meshag_shared::StreamConfig::audio_input();
+
+            if let Err(e) = queue_clone
+                .consume_events(
+                    stream_config,
+                    "AUDIO_INPUT.session.*".to_string(),
+                    move |event| {
+                        let svc = Arc::clone(&service);
+                        let q = q_clone.clone();
+                        async move { handle_audio_event(svc, q, event).await }
+                    },
+                )
+                .await
+            {
+                error!("Failed to consume audio input events: {}", e);
+            }
+        });
+
+        // Start transcription polling task
+        let service_clone = Arc::new(self.clone());
+        tokio::spawn(async move {
+            poll_transcriptions(service_clone, queue).await;
+        });
+
+        Ok(())
     }
 
     pub async fn list_connectors(&self) -> Vec<String> {
@@ -91,6 +136,200 @@ impl SttService {
 
         results
     }
+
+    /// Create a streaming session for continuous audio processing
+    pub async fn create_streaming_session(
+        &self,
+        session_id: String,
+        sample_rate: u32,
+        channels: u32,
+        format: AudioFormat,
+        language: Option<String>,
+    ) -> Result<()> {
+        let connectors = self.connectors.read().await;
+        let default_name = self.default_connector.read().await;
+
+        let connector_key = default_name.as_deref();
+        let connector = match connector_key.and_then(|name| connectors.get(name)) {
+            Some(connector) => connector,
+            None => {
+                error!("No STT connector found for session creation");
+                return Err(anyhow::anyhow!("No STT connector available"));
+            }
+        };
+
+        // Check if this is a Deepgram connector that supports streaming
+        if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
+            deepgram
+                .create_session(session_id, sample_rate, channels, format, language)
+                .await?;
+            info!("Created streaming session for Deepgram");
+        } else {
+            return Err(anyhow::anyhow!(
+                "Connector does not support streaming sessions"
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Send audio data to a streaming session
+    pub async fn send_audio_to_session(&self, session_id: &str, audio_data: Vec<u8>) -> Result<()> {
+        let connectors = self.connectors.read().await;
+        let default_name = self.default_connector.read().await;
+
+        let connector_key = default_name.as_deref();
+        let connector = match connector_key.and_then(|name| connectors.get(name)) {
+            Some(connector) => connector,
+            None => {
+                error!("No STT connector found for audio sending");
+                return Err(anyhow::anyhow!("No STT connector available"));
+            }
+        };
+
+        // Check if this is a Deepgram connector that supports streaming
+        if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
+            deepgram.send_audio(session_id, audio_data).await?;
+        } else {
+            return Err(anyhow::anyhow!(
+                "Connector does not support streaming sessions"
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Get transcription from a streaming session
+    pub async fn get_session_transcription(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<meshag_connectors::SttResponse>> {
+        let connectors = self.connectors.read().await;
+        let default_name = self.default_connector.read().await;
+
+        let connector_key = default_name.as_deref();
+        let connector = match connector_key.and_then(|name| connectors.get(name)) {
+            Some(connector) => connector,
+            None => {
+                error!("No STT connector found for transcription retrieval");
+                return Err(anyhow::anyhow!("No STT connector available"));
+            }
+        };
+
+        // Check if this is a Deepgram connector that supports streaming
+        if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
+            deepgram.get_transcription(session_id).await
+        } else {
+            Err(anyhow::anyhow!(
+                "Connector does not support streaming sessions"
+            ))
+        }
+    }
+
+    /// Close a streaming session
+    pub async fn close_streaming_session(&self, session_id: &str) -> Result<()> {
+        let connectors = self.connectors.read().await;
+        let default_name = self.default_connector.read().await;
+
+        let connector_key = default_name.as_deref();
+        let connector = match connector_key.and_then(|name| connectors.get(name)) {
+            Some(connector) => connector,
+            None => {
+                error!("No STT connector found for session closure");
+                return Err(anyhow::anyhow!("No STT connector available"));
+            }
+        };
+
+        // Check if this is a Deepgram connector that supports streaming
+        if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
+            deepgram.close_session(session_id).await?;
+            info!("Closed streaming session: {}", session_id);
+        } else {
+            return Err(anyhow::anyhow!(
+                "Connector does not support streaming sessions"
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Get or create a session state for buffering early media events
+    async fn get_or_create_session_state(&self, session_id: String) -> Arc<Mutex<SessionState>> {
+        let mut states = self.session_states.write().await;
+
+        if let Some(state) = states.get(&session_id) {
+            Arc::clone(state)
+        } else {
+            let state = Arc::new(Mutex::new(SessionState::new(session_id.clone())));
+            states.insert(session_id, Arc::clone(&state));
+            state
+        }
+    }
+
+    /// Create streaming session and flush buffered audio
+    async fn establish_streaming_session(
+        &self,
+        session_id: String,
+        media_payload: &MediaEventPayload,
+    ) -> Result<()> {
+        let format: Result<AudioFormat, strum::ParseError> =
+            AudioFormat::from_str(&media_payload.media_format.encoding);
+
+        let audio_format = match format {
+            Ok(format) => format,
+            Err(e) => {
+                error!(
+                    "Unsupported audio format for session {}: {:?}",
+                    session_id, e
+                );
+                return Err(anyhow::anyhow!("Unsupported audio format"));
+            }
+        };
+
+        // Create the streaming session
+        self.create_streaming_session(
+            session_id.clone(),
+            media_payload.media_format.sample_rate,
+            media_payload.media_format.channels,
+            audio_format.clone(),
+            None, // language
+        )
+        .await?;
+
+        // Get session state and flush buffered audio
+        let session_state = self.get_or_create_session_state(session_id.clone()).await;
+        let mut state = session_state.lock().await;
+
+        // Mark session as established
+        state.is_established = true;
+        state.audio_format = Some(audio_format);
+        state.sample_rate = Some(media_payload.media_format.sample_rate);
+        state.channels = Some(media_payload.media_format.channels);
+
+        // Send all buffered audio data
+        for audio_data in state.buffered_audio.drain(..) {
+            if let Err(e) = self.send_audio_to_session(&session_id, audio_data).await {
+                error!(
+                    "Failed to send buffered audio to session {}: {}",
+                    session_id, e
+                );
+            }
+        }
+
+        info!(
+            "Established streaming session and flushed {} buffered audio chunks for session: {}",
+            state.buffered_audio.len(),
+            session_id
+        );
+
+        Ok(())
+    }
+
+    /// Remove session state when session ends
+    async fn remove_session_state(&self, session_id: &str) {
+        let mut states = self.session_states.write().await;
+        states.remove(session_id);
+    }
 }
 
 impl Clone for SttService {
@@ -99,6 +338,7 @@ impl Clone for SttService {
             connectors: Arc::clone(&self.connectors),
             default_connector: Arc::clone(&self.default_connector),
             router: Arc::clone(&self.router),
+            session_states: Arc::clone(&self.session_states),
         }
     }
 }
@@ -110,8 +350,8 @@ async fn handle_audio_event(
 ) -> Result<()> {
     match event.event_type.as_str() {
         "media_input" => handle_audio_chunk(service, queue, event).await?,
-        "session_start" => handle_session_start(event).await?,
-        "session_end" => handle_session_end(event).await?,
+        "session_start" => handle_session_start(service, event).await?,
+        "session_end" => handle_session_end(service, event).await?,
         _ => error!("Unknown event type: {}", event.event_type),
     }
     Ok(())
@@ -119,116 +359,210 @@ async fn handle_audio_event(
 
 async fn handle_audio_chunk(
     service: Arc<SttService>,
-    queue: EventQueue,
+    _queue: EventQueue,
     event: ProcessingEvent,
 ) -> Result<()> {
-    info!("Handling audio chunk: {:?}", event);
-
-    // Parse the MediaEventPayload from the transport service
     let media_payload: MediaEventPayload = serde_json::from_value(event.payload.clone())
         .map_err(|e| anyhow::anyhow!("Failed to parse MediaEventPayload: {}", e))?;
 
-    info!(
-        "Processing audio chunk: session_id={}, call_sid={}, track={}, chunk={}",
-        media_payload.session_id, media_payload.call_sid, media_payload.track, media_payload.chunk
-    );
+    let session_id = event.session_id.to_string();
 
-    // Decode base64 audio data
     let audio_data = STANDARD
         .decode(&media_payload.payload)
         .map_err(|e| anyhow::anyhow!("Failed to decode base64 audio data: {}", e))?;
 
-    // Get connector preference from event or use default
-    let connector_name = event.payload.get("connector").and_then(|v| v.as_str());
+    let session_state = service
+        .get_or_create_session_state(session_id.clone())
+        .await;
+    let mut state = session_state.lock().await;
 
-    // Clone the service to get access to connectors
-    let connectors = service.connectors.read().await;
-    let default_name = service.default_connector.read().await;
-
-    let connector_key = connector_name.or_else(|| default_name.as_deref());
-    let connector = match connector_key.and_then(|name| connectors.get(name)) {
-        Some(connector) => connector,
-        None => {
-            error!("No STT connector found for: {:?}", connector_key);
-            return Err(anyhow::anyhow!("No STT connector available"));
-        }
-    };
-
-    let format: Result<AudioFormat, strum::ParseError> =
-        AudioFormat::from_str(&media_payload.media_format.encoding);
-
-    let mut encoding = None;
-
-    match format {
-        Ok(format) => {
-            encoding = Some(format);
-        }
-        _ => {
-            error!("Unsupported audio format: {:?}", format);
-            return Err(anyhow::anyhow!("Unsupported audio format"));
-        }
-    }
-
-    // Process the audio chunk
-    match connector
-        .transcribe(SttRequest {
-            audio_data: audio_data,
-            language: None,
-            sample_rate: media_payload.media_format.sample_rate,
-            channels: media_payload.media_format.channels,
-            format: encoding.unwrap(),
-            options: HashMap::new(),
-        })
-        .await
-    {
-        Ok(transcription) => {
-            info!("Transcription result: {:?}", transcription.text);
-
-            // Create response event for LLM service
-            let response_payload = serde_json::json!({
-                "session_id": media_payload.session_id,
-                "call_sid": media_payload.call_sid,
-                "transcription": transcription,
-                "timestamp": media_payload.timestamp,
-                "track": media_payload.track,
-                "chunk": media_payload.chunk
-            });
-
-            let response_event = ProcessingEvent {
-                conversation_id: event.conversation_id,
-                correlation_id: event.correlation_id,
-                event_type: "transcription_output".to_string(),
-                payload: response_payload,
-                timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-                source_service: "stt-service".to_string(),
-                target_service: "llm-service".to_string(),
-            };
-
-            // Publish to LLM service
-            if let Err(e) = queue.publish_event("STT_OUTPUT", response_event).await {
-                error!("Failed to publish transcription to LLM service: {}", e);
-            }
-        }
-        Err(e) => {
-            error!("Failed to process audio: {}", e);
+    if state.is_established {
+        drop(state);
+        if let Err(e) = service.send_audio_to_session(&session_id, audio_data).await {
+            error!("Failed to send audio to streaming session: {}", e);
             return Err(e);
         }
+    } else {
+        info!(
+            "Session {} not established yet, buffering audio chunk",
+            session_id
+        );
+        state.buffered_audio.push(audio_data);
+
+        if state.audio_format.is_none() {
+            drop(state);
+
+            if let Err(e) = service
+                .establish_streaming_session(session_id.clone(), &media_payload)
+                .await
+            {
+                error!(
+                    "Failed to establish streaming session for {}: {}",
+                    session_id, e
+                );
+            }
+        }
     }
 
     Ok(())
 }
 
-async fn handle_session_start(event: ProcessingEvent) -> Result<()> {
-    info!(conversation_id = %event.conversation_id, "STT session started");
+async fn handle_session_start(service: Arc<SttService>, event: ProcessingEvent) -> Result<()> {
+    let session_id = event.session_id.to_string();
+    info!(session_id = %session_id, "STT session started");
+
+    let session_state = service
+        .get_or_create_session_state(session_id.clone())
+        .await;
+    let state = session_state.lock().await;
+
+    if state.is_established {
+        info!(
+            "Session {} already established from early media events",
+            session_id
+        );
+        return Ok(());
+    }
+
+    if let (Some(audio_format), Some(sample_rate), Some(channels)) = (
+        state.audio_format.clone(),
+        state.sample_rate,
+        state.channels,
+    ) {
+        drop(state);
+
+        if let Err(e) = service
+            .create_streaming_session(
+                session_id.clone(),
+                sample_rate,
+                channels,
+                audio_format,
+                None, // language
+            )
+            .await
+        {
+            error!(
+                "Failed to create streaming session from buffered info: {}",
+                e
+            );
+            return Err(e);
+        }
+
+        let mut state = session_state.lock().await;
+        state.is_established = true;
+
+        let buffered_count = state.buffered_audio.len();
+        let buffered_audio: Vec<Vec<u8>> = state.buffered_audio.drain(..).collect();
+        drop(state);
+
+        for audio_data in buffered_audio {
+            if let Err(e) = service.send_audio_to_session(&session_id, audio_data).await {
+                error!(
+                    "Failed to send buffered audio to session {}: {}",
+                    session_id, e
+                );
+            }
+        }
+
+        info!(
+            "Established session {} from session_start and flushed {} buffered audio chunks",
+            session_id, buffered_count
+        );
+    } else {
+        drop(state);
+
+        if let Ok(media_payload) =
+            serde_json::from_value::<MediaEventPayload>(event.payload.clone())
+        {
+            if let Err(e) = service
+                .establish_streaming_session(session_id.clone(), &media_payload)
+                .await
+            {
+                error!(
+                    "Failed to establish streaming session from session_start: {}",
+                    e
+                );
+                return Err(e);
+            }
+        } else {
+            info!("Session {} started but no media format info available yet, waiting for media events", session_id);
+        }
+    }
+
     Ok(())
 }
 
-async fn handle_session_end(event: ProcessingEvent) -> Result<()> {
-    info!(conversation_id = %event.conversation_id, "STT session ended");
+async fn handle_session_end(service: Arc<SttService>, event: ProcessingEvent) -> Result<()> {
+    let session_id = event.session_id.to_string();
+    info!(session_id = %session_id, "STT session ended");
+
+    if let Err(e) = service.close_streaming_session(&session_id).await {
+        error!("Failed to close streaming session: {}", e);
+    }
+
+    service.remove_session_state(&session_id).await;
+    info!("Cleaned up session state for: {}", session_id);
+
     Ok(())
 }
 
-// Service state for HTTP handlers
+async fn poll_transcriptions(service: Arc<SttService>, queue: EventQueue) {
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+
+    loop {
+        interval.tick().await;
+
+        let connectors = service.connectors.read().await;
+        let default_name = service.default_connector.read().await;
+
+        if let Some(connector_name) = default_name.as_deref() {
+            if let Some(connector) = connectors.get(connector_name) {
+                if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
+                    let sessions = deepgram.sessions.read().await;
+
+                    for (session_id, session_conn) in sessions.iter() {
+                        let mut session = session_conn.lock().await;
+
+                        while let Ok(transcription) = session.transcription_rx.try_recv() {
+                            let response_payload = serde_json::json!({
+                                "transcription": transcription,
+                                "timestamp": chrono::Utc::now().timestamp_millis()
+                            });
+
+                            let session_id = Uuid::parse_str(session_id);
+                            let session_id = match session_id {
+                                Ok(session_id) => session_id,
+                                Err(_) => {
+                                    error!("Failed to parse session ID: {:?}", session_id);
+                                    return;
+                                }
+                            };
+
+                            let response_event = ProcessingEvent {
+                                session_id: session_id.to_string(),
+                                conversation_id: Uuid::new_v4(),
+                                correlation_id: Uuid::new_v4(),
+                                event_type: "transcription_output".to_string(),
+                                payload: response_payload,
+                                timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+                                source_service: "stt-service".to_string(),
+                                target_service: "llm-service".to_string(),
+                            };
+
+                            let subject = format!("STT_OUTPUT.session.{}", session_id);
+
+                            // Publish to LLM service
+                            if let Err(e) = queue.publish_event(&subject, response_event).await {
+                                error!("Failed to publish transcription to LLM service: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub struct SttServiceState {
     pub event_queue: EventQueue,
     pub stt_service: SttService,
@@ -240,74 +574,7 @@ impl ServiceState for SttServiceState {
         "stt-service".to_string()
     }
 
-    async fn is_ready(&self) -> Vec<HealthCheck> {
-        let mut checks = vec![];
-
-        // Check NATS connection
-        let nats_healthy = self.event_queue.health_check().await.unwrap_or(false);
-        checks.push(HealthCheck {
-            name: "nats".to_string(),
-            status: if nats_healthy {
-                "healthy".to_string()
-            } else {
-                "unhealthy".to_string()
-            },
-            message: Some(if nats_healthy {
-                "Connected".to_string()
-            } else {
-                "Disconnected".to_string()
-            }),
-        });
-
-        // Check connectors
-        let connector_health = self.stt_service.health_check_connectors().await;
-        for (name, healthy) in connector_health {
-            checks.push(HealthCheck {
-                name: format!("connector_{}", name),
-                status: if healthy {
-                    "healthy".to_string()
-                } else {
-                    "unhealthy".to_string()
-                },
-                message: Some(if healthy {
-                    "Ready".to_string()
-                } else {
-                    "Not ready".to_string()
-                }),
-            });
-        }
-
-        checks
-    }
-
     fn event_queue(&self) -> &EventQueue {
         &self.event_queue
-    }
-
-    async fn get_metrics(&self) -> Vec<String> {
-        let mut metrics = vec![];
-
-        let connectors = self.stt_service.list_connectors().await;
-        let connector_health = self.stt_service.health_check_connectors().await;
-
-        metrics.push(format!("active_connectors {}", connectors.len()));
-        metrics.push(format!(
-            "healthy_connectors {}",
-            connector_health.values().filter(|&&h| h).count()
-        ));
-
-        // Add queue metrics
-        if let Ok(queue_metrics) = self.event_queue.get_metrics("AUDIO_INPUT").await {
-            metrics.push(format!(
-                "pending_messages {}",
-                queue_metrics.pending_messages
-            ));
-            metrics.push(format!(
-                "delivered_messages {}",
-                queue_metrics.delivered_messages
-            ));
-        }
-
-        metrics
     }
 }

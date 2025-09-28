@@ -33,25 +33,18 @@ pub enum AudioFormat {
     Ogg,
 }
 
-/// Generic TTS connector trait that all providers must implement
 #[async_trait]
 pub trait TtsConnector: Send + Sync {
-    /// Unique identifier for this connector
     fn provider_name(&self) -> &'static str;
 
-    /// Check if the connector is healthy and ready to process requests
     async fn health_check(&self) -> Result<bool>;
 
-    /// Convert text to speech
     async fn synthesize(&self, request: TtsRequest) -> Result<TtsResponse>;
 
-    /// Get available voices
     async fn available_voices(&self) -> Result<Vec<Voice>>;
 
-    /// Get supported audio formats
     fn supported_formats(&self) -> Vec<AudioFormat>;
 
-    /// Get provider-specific configuration schema
     fn config_schema(&self) -> serde_json::Value;
 }
 

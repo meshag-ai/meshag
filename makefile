@@ -33,6 +33,16 @@ nats:
 	@echo "NATS server started on ports 4222 (client), 8222 (monitoring), 6222 (routing)"
 	@echo "Monitor at: http://localhost:8222"
 
+nats-ui:
+	@echo "Starting NATS UI server..."
+	docker run -d \
+  		--name meshag-nats-ui \
+  		--restart unless-stopped \
+  		-p 31311:31311 \
+  		-v nats_data:/db \
+  		-e NATS_URL=nats://host.docker.internal:4222 \
+  		ghcr.io/nats-nui/nui
+
 # Start Valkey server
 valkey:
 	@echo "Starting Valkey server..."
