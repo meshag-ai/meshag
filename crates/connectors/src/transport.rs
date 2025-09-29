@@ -104,6 +104,4 @@ pub trait TransportConnector: Send + Sync {
         session_id: &str,
         participant: ParticipantConfig,
     ) -> Result<String>;
-
-    fn config_schema(&self) -> serde_json::Value;
 }

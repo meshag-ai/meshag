@@ -352,27 +352,6 @@ impl TransportConnector for DailyTransportConnector {
 
         Ok(token)
     }
-
-    fn config_schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "api_key": {
-                    "type": "string",
-                    "description": "Daily.co API key"
-                },
-                "domain": {
-                    "type": "string",
-                    "description": "Daily.co domain name"
-                },
-                "custom_domain": {
-                    "type": "string",
-                    "description": "Custom domain (optional)"
-                }
-            },
-            "required": ["api_key", "domain"]
-        })
-    }
 }
 
 /// Factory functions for Daily.co connectors

@@ -52,6 +52,4 @@ pub trait LlmConnector: Send + Sync {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse>;
 
     async fn available_models(&self) -> Result<Vec<String>>;
-
-    fn config_schema(&self) -> serde_json::Value;
 }

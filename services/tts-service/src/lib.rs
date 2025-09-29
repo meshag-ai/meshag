@@ -26,7 +26,6 @@ impl TtsService {
         let mut connectors = self.connectors.write().await;
         connectors.insert(name.to_string(), connector);
 
-        // Set as default if it's the first connector
         let mut default = self.default_connector.write().await;
         if default.is_none() {
             *default = Some(name.to_string());
@@ -47,9 +46,7 @@ impl TtsService {
             }
         };
 
-        let connector_name = connector_name.as_str();
-
-        connectors.get(connector_name).map(|c| c.clone())
+        connectors.get(&connector_name).map(|c| c.clone())
     }
 
     pub async fn start_processing(&self, queue: EventQueue) -> Result<()> {
@@ -134,14 +131,15 @@ async fn handle_llm_response(
         language: event.payload["language"].as_str().map(|s| s.to_string()),
         speed: event.payload["speed"].as_f64().map(|f| f as f32),
         pitch: event.payload["pitch"].as_f64().map(|f| f as f32),
-        format: meshag_connectors::tts::AudioFormat::Mp3, // Default format, could be configurable
+        format: meshag_connectors::tts::AudioFormat::Mulaw,
         options: HashMap::new(),
     };
 
     match connector.synthesize(tts_request).await {
         Ok(response) => {
+            let session_id = event.session_id.clone();
             let output_event = ProcessingEvent {
-                session_id: event.session_id,
+                session_id: session_id.clone(),
                 conversation_id: event.conversation_id,
                 correlation_id: event.correlation_id,
                 event_type: "tts_synthesis_complete".to_string(),
@@ -159,8 +157,14 @@ async fn handle_llm_response(
                 target_service: "transport-service".to_string(),
             };
 
-            let subject = format!("TTS_OUTPUT.session.{}", event.conversation_id);
-            queue.publish_event(&subject, output_event).await?;
+            info!(
+                session_id = %session_id,
+                duration_ms = response.duration_ms,
+                "Publishing TTS output event"
+            );
+
+            let subject = format!("TTS_OUTPUT.session.{}", session_id);
+            queue.publish_nats_core(&subject, output_event).await?;
         }
         Err(e) => {
             error!("TTS synthesis failed: {}", e);

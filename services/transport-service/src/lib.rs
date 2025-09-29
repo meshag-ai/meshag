@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use dashmap::DashMap;
+use meshag_connectors::tts::AudioFormat;
 use meshag_connectors::{
     twilio_transport_connector, ParticipantConfig, RoomConfig, SessionInfo, TransportConnector,
     TransportRequest, TransportResponse, TwilioConfig,
@@ -8,8 +9,8 @@ use meshag_connectors::{
 use meshag_orchestrator::{AgentConfig, ConfigStorage};
 use meshag_service_common::ServiceState;
 use meshag_shared::{
-    EventQueue, MediaEventPayload, ProcessingEvent, StreamConfig, TwilioMediaData,
-    TwilioMediaFormat, TwilioStartData,
+    EventQueue, MediaEventPayload, ProcessingEvent, TwilioMediaData, TwilioMediaFormat,
+    TwilioStartData,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -472,7 +473,7 @@ impl TransportServiceState {
     pub async fn publish_session_start_event(&self, session_id: &str) -> Result<String> {
         let event = ProcessingEvent {
             session_id: session_id.to_string(),
-            conversation_id: Uuid::new_v4(), // Generate new conversation ID for each media event
+            conversation_id: Uuid::new_v4(),
             correlation_id: Uuid::new_v4(),
             event_type: "session_start".to_string(),
             payload: serde_json::Value::Null,
@@ -490,7 +491,7 @@ impl TransportServiceState {
     pub async fn publish_session_end_event(&self, session_id: &str) -> Result<String> {
         let event = ProcessingEvent {
             session_id: session_id.to_string(),
-            conversation_id: Uuid::new_v4(), // Generate new conversation ID for each media event
+            conversation_id: Uuid::new_v4(),
             correlation_id: Uuid::new_v4(),
             event_type: "session_end".to_string(),
             payload: serde_json::Value::Null,
@@ -503,109 +504,6 @@ impl TransportServiceState {
         let message_id = self.event_queue.publish_event(&subject, event).await?;
 
         Ok(message_id)
-    }
-
-    pub async fn start_response_consumer(&self) -> Result<()> {
-        let event_queue = self.event_queue.clone();
-        let session_providers = self.session_providers.clone();
-        let connectors = self.connectors.clone();
-
-        tokio::spawn(async move {
-            let stream_config = StreamConfig::tts_output();
-            let subject = "TTS_OUTPUT".to_string();
-
-            if let Err(e) = event_queue.consume_events(stream_config, subject, move |event| {
-                let session_providers = session_providers.clone();
-                let connectors = connectors.clone();
-
-                async move {
-                    if let Some(payload) = event.payload.get("session_id") {
-                        if let Some(session_id) = payload.as_str() {
-                            if let Ok(response_payload) = serde_json::from_value::<ResponseEventPayload>(event.payload.clone()) {
-                                tracing::info!(
-                                    session_id = %session_id,
-                                    response_type = %response_payload.response_type,
-                                    "Received response event for WebSocket"
-                                );
-
-                                if let Some(provider_entry) = session_providers.get(session_id) {
-                                    let provider_name = provider_entry.value().clone();
-                                    if let Some(connector) = connectors.get(&provider_name) {
-                                        match provider_name.as_str() {
-                                            "twilio" => {
-                                                if let Some(twilio_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::twilio::TwilioTransportConnector>() {
-                                                    let media_message = serde_json::json!({
-                                                        "event": "media",
-                                                        "streamSid": response_payload.call_sid,
-                                                        "media": {
-                                                            "track": "outbound",
-                                                            "chunk": "1",
-                                                            "timestamp": chrono::Utc::now().timestamp_millis().to_string(),
-                                                            "payload": response_payload.data
-                                                        }
-                                                    });
-
-                                                    let ws_message = tokio_tungstenite::tungstenite::Message::Text(
-                                                        serde_json::to_string(&media_message)?
-                                                    );
-
-                                                    if let Err(e) = twilio_connector.write_message(session_id, ws_message).await {
-                                                        tracing::error!(
-                                                            session_id = %session_id,
-                                                            error = %e,
-                                                            "Failed to write response to WebSocket"
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                            _ => {
-                                                tracing::warn!(
-                                                    session_id = %session_id,
-                                                    provider = %provider_name,
-                                                    "Response writing not supported for provider"
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Ok(())
-                }
-            }).await {
-                tracing::error!("Response consumer error: {}", e);
-            }
-        });
-
-        Ok(())
-    }
-
-    pub async fn is_websocket_connected(&self, session_id: &str) -> Result<bool> {
-        if let Some(provider_name) = self.get_provider_for_session(session_id) {
-            if let Some(connector) = self.get_connector(&provider_name) {
-                match provider_name.as_str() {
-                    "twilio" => {
-                        if let Some(twilio_connector) = connector.as_any().downcast_ref::<meshag_connectors::providers::twilio::TwilioTransportConnector>() {
-                            Ok(twilio_connector.is_websocket_connected(session_id).await)
-                        } else {
-                            Err(anyhow::anyhow!("Failed to cast connector to Twilio connector"))
-                        }
-                    }
-                    _ => Err(anyhow::anyhow!("WebSocket connection check not supported for provider: {}", provider_name))
-                }
-            } else {
-                Err(anyhow::anyhow!(
-                    "Connector not found for provider: {}",
-                    provider_name
-                ))
-            }
-        } else {
-            Err(anyhow::anyhow!(
-                "Provider not found for session: {}",
-                session_id
-            ))
-        }
     }
 }
 
@@ -677,12 +575,26 @@ pub enum WebSocketMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResponseEventPayload {
+pub struct ResponseEvent {
     pub session_id: String,
-    pub call_sid: String,
-    pub response_type: String, // "tts_audio", "transcription", etc.
-    pub data: String,          // Base64 encoded response data
-    pub metadata: HashMap<String, String>,
+    pub conversation_id: String,
+    pub correlation_id: Uuid,
+    pub event_type: String,
+    pub payload: EventPayload,
+    pub timestamp_ms: u64,
+    pub source_service: String,
+    pub target_service: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventPayload {
+    pub audio_data: Vec<u8>,
+    pub format: AudioFormat,
+    pub sample_rate: u32,
+    pub channels: u8,
+    pub duration_ms: u64,
+    pub processing_time_ms: u64,
+    pub provider: String,
 }
 
 pub struct WebSocketConnection {

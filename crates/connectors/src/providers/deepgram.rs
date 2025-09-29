@@ -1,11 +1,10 @@
-use crate::stt::{AudioFormat, SttConnector, SttRequest, SttResponse};
+use crate::stt::{AudioFormat, SttConnector, SttResponse};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use reqwest::header::HeaderValue;
 use serde::Deserialize;
 use serde_json::json;
-use std::time::Instant;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_tungstenite::{
@@ -13,7 +12,6 @@ use tokio_tungstenite::{
 };
 use url::Url;
 
-/// Deepgram WebSocket response structures
 #[derive(Debug, Deserialize)]
 struct DeepgramResponse {
     #[serde(rename = "type")]
@@ -58,10 +56,8 @@ struct DeepgramMetadata {
 struct DeepgramModelInfo {
     name: String,
     version: String,
-    arch: String,
 }
 
-/// Session WebSocket connection for streaming audio
 #[derive(Debug)]
 pub struct SessionConnection {
     pub session_id: String,
@@ -69,8 +65,6 @@ pub struct SessionConnection {
     pub transcription_rx: mpsc::UnboundedReceiver<SttResponse>,
     pub _handle: tokio::task::JoinHandle<()>,
 }
-
-/// Deepgram provider configuration
 #[derive(Debug, Clone)]
 pub struct DeepgramConfig {
     pub api_key: String,
@@ -98,7 +92,6 @@ impl DeepgramConfig {
     }
 }
 
-/// Deepgram STT Connector
 #[derive(Debug)]
 pub struct DeepgramSttConnector {
     config: DeepgramConfig,
@@ -115,7 +108,6 @@ impl DeepgramSttConnector {
         }
     }
 
-    /// Convert AudioFormat to Deepgram encoding parameter
     fn get_encoding(&self, format: &AudioFormat) -> &'static str {
         match format {
             AudioFormat::Wav => "linear16",
@@ -181,7 +173,6 @@ impl DeepgramSttConnector {
                     match msg {
                         Ok(Message::Text(text)) => {
                             if let Ok(response) = serde_json::from_str::<DeepgramResponse>(&text) {
-                                println!("Response: {:?}", response);
                                 match response.response_type.as_str() {
                                     "Results" => {
                                         if let Some(channel) = response.channel {
@@ -189,7 +180,6 @@ impl DeepgramSttConnector {
                                             {
                                                 let mut provider_metadata = HashMap::new();
 
-                                                // Store metadata
                                                 if let Some(metadata) = response.metadata {
                                                     if let Some(model_info) = metadata.model_info {
                                                         provider_metadata.insert(
@@ -213,7 +203,7 @@ impl DeepgramSttConnector {
                                                     text: alternative.transcript.clone(),
                                                     confidence: Some(alternative.confidence),
                                                     language_detected: None,
-                                                    processing_time_ms: 0, // Real-time streaming
+                                                    processing_time_ms: 0,
                                                     provider_metadata,
                                                 };
 
@@ -228,9 +218,7 @@ impl DeepgramSttConnector {
                                             }
                                         }
                                     }
-                                    "Metadata" => {
-                                        // Handle metadata response if needed
-                                    }
+                                    "Metadata" => {}
                                     _ => {
                                         tracing::debug!(
                                             "Received response type: {}",
@@ -263,7 +251,6 @@ impl DeepgramSttConnector {
             }
         });
 
-        // Create session connection
         let session_conn = SessionConnection {
             session_id: session_id.clone(),
             write_tx,
@@ -271,14 +258,12 @@ impl DeepgramSttConnector {
             _handle: handle,
         };
 
-        // Store session
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id, Arc::new(Mutex::new(session_conn)));
 
         Ok(())
     }
 
-    /// Send audio data to an existing session
     pub async fn send_audio(&self, session_id: &str, audio_data: Vec<u8>) -> Result<()> {
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(session_id) {
@@ -293,7 +278,6 @@ impl DeepgramSttConnector {
         }
     }
 
-    /// Get transcription from a session (non-blocking)
     pub async fn get_transcription(&self, session_id: &str) -> Result<Option<SttResponse>> {
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(session_id) {
@@ -304,7 +288,6 @@ impl DeepgramSttConnector {
         }
     }
 
-    /// Close a session
     pub async fn close_session(&self, session_id: &str) -> Result<()> {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.remove(session_id) {
@@ -335,7 +318,6 @@ impl SttConnector for DeepgramSttConnector {
     }
 
     async fn health_check(&self) -> Result<bool> {
-        // Test WebSocket connection to Deepgram
         let ws_url = format!(
             "wss://api.deepgram.com/v1/listen?model={}",
             self.config.default_model
@@ -343,10 +325,7 @@ impl SttConnector for DeepgramSttConnector {
         let url = Url::parse(&ws_url).map_err(|e| anyhow!("Invalid WebSocket URL: {}", e))?;
 
         match connect_async(url).await {
-            Ok((_ws_stream, _response)) => {
-                // Connection successful, close it immediately
-                Ok(true)
-            }
+            Ok((_ws_stream, _response)) => Ok(true),
             Err(e) => {
                 tracing::warn!("Deepgram health check failed: {}", e);
                 Ok(false)
@@ -359,30 +338,7 @@ impl SttConnector for DeepgramSttConnector {
     }
 
     fn supported_languages(&self) -> Option<Vec<String>> {
-        None // Supports many languages
-    }
-
-    fn config_schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "api_key": {
-                    "type": "string",
-                    "description": "Deepgram API key"
-                },
-                "base_url": {
-                    "type": "string",
-                    "description": "Base URL for Deepgram API (optional)",
-                    "default": "https://api.deepgram.com/v1"
-                },
-                "default_model": {
-                    "type": "string",
-                    "description": "Default Deepgram model to use",
-                    "default": "nova-2"
-                }
-            },
-            "required": ["api_key"]
-        })
+        None
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -390,7 +346,6 @@ impl SttConnector for DeepgramSttConnector {
     }
 }
 
-/// Factory functions for Deepgram connectors
 pub struct Deepgram;
 
 impl Deepgram {

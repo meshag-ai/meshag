@@ -1,5 +1,5 @@
 use crate::llm::{ChatMessage, LlmConnector, LlmRequest, LlmResponse, MessageRole, TokenUsage};
-use crate::stt::{AudioFormat, SttConnector, SttRequest, SttResponse};
+use crate::stt::{AudioFormat, SttConnector};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::json;
@@ -7,13 +7,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// OpenAI provider configuration
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
     pub api_key: String,
     pub base_url: String,
     pub default_llm_model: String,
-    pub default_stt_model: String,
 }
 
 impl OpenAIConfig {
@@ -22,7 +20,6 @@ impl OpenAIConfig {
             api_key,
             base_url: "https://api.openai.com/v1".to_string(),
             default_llm_model: "gpt-4o-mini".to_string(),
-            default_stt_model: "whisper-1".to_string(),
         }
     }
 
@@ -35,14 +32,8 @@ impl OpenAIConfig {
         self.default_llm_model = model;
         self
     }
-
-    pub fn with_stt_model(mut self, model: String) -> Self {
-        self.default_stt_model = model;
-        self
-    }
 }
 
-/// OpenAI LLM Connector
 #[derive(Debug, Clone)]
 pub struct OpenAILlmConnector {
     config: OpenAIConfig,
@@ -185,29 +176,6 @@ impl LlmConnector for OpenAILlmConnector {
 
         Ok(models)
     }
-
-    fn config_schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "api_key": {
-                    "type": "string",
-                    "description": "OpenAI API key"
-                },
-                "base_url": {
-                    "type": "string",
-                    "description": "Base URL for OpenAI API (optional)",
-                    "default": "https://api.openai.com/v1"
-                },
-                "default_llm_model": {
-                    "type": "string",
-                    "description": "Default LLM model to use",
-                    "default": "gpt-3.5-turbo"
-                }
-            },
-            "required": ["api_key"]
-        })
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -249,29 +217,6 @@ impl SttConnector for OpenAISttConnector {
     fn supported_languages(&self) -> Option<Vec<String>> {
         // Whisper supports many languages, returning None means "all supported"
         None
-    }
-
-    fn config_schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "api_key": {
-                    "type": "string",
-                    "description": "OpenAI API key for Whisper"
-                },
-                "base_url": {
-                    "type": "string",
-                    "description": "Base URL for OpenAI API (optional)",
-                    "default": "https://api.openai.com/v1"
-                },
-                "default_stt_model": {
-                    "type": "string",
-                    "description": "Whisper model to use",
-                    "default": "whisper-1"
-                }
-            },
-            "required": ["api_key"]
-        })
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

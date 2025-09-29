@@ -31,6 +31,7 @@ pub enum AudioFormat {
     Mp3,
     Flac,
     Ogg,
+    Mulaw,
 }
 
 #[async_trait]
@@ -44,8 +45,6 @@ pub trait TtsConnector: Send + Sync {
     async fn available_voices(&self) -> Result<Vec<Voice>>;
 
     fn supported_formats(&self) -> Vec<AudioFormat>;
-
-    fn config_schema(&self) -> serde_json::Value;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

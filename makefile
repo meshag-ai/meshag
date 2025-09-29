@@ -85,7 +85,7 @@ tts: load-env
 	@echo "Starting TTS service..."
 	cargo run -p tts-service
 
-t: tts
+tt: tts
 
 all: load-env
 	@echo "Starting all services..."

@@ -339,31 +339,6 @@ impl TransportConnector for TwilioTransportConnector {
         // Return the call SID as the "token"
         Ok(session_id.to_string())
     }
-
-    fn config_schema(&self) -> serde_json::Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "account_sid": {
-                    "type": "string",
-                    "description": "Twilio Account SID"
-                },
-                "auth_token": {
-                    "type": "string",
-                    "description": "Twilio Auth Token"
-                },
-                "phone_number": {
-                    "type": "string",
-                    "description": "Twilio Phone Number"
-                },
-                "webhook_url": {
-                    "type": "string",
-                    "description": "Webhook URL for call events"
-                }
-            },
-            "required": ["account_sid", "auth_token", "phone_number"]
-        })
-    }
 }
 
 /// Factory function to create Twilio transport connector

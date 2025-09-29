@@ -165,7 +165,7 @@ impl ServiceRouter {
     async fn send_event(&self, event: RoutingEvent) -> Result<()> {
         let processing_event = ProcessingEvent {
             session_id: event.session_id.clone(),
-            conversation_id: Uuid::parse_str(&event.session_id).unwrap_or_else(|_| Uuid::new_v4()),
+            conversation_id: Uuid::parse_str(&event.session_id).unwrap(),
             correlation_id: event.id,
             event_type: event.stream.clone(),
             payload: event.payload,

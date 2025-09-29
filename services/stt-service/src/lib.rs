@@ -14,7 +14,6 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info};
 use uuid::Uuid;
 
-/// Session state for managing early media events
 #[derive(Debug)]
 pub struct SessionState {
     pub session_id: String,
@@ -59,7 +58,6 @@ impl SttService {
         let mut connectors = self.connectors.write().await;
         connectors.insert(name.to_string(), connector);
 
-        // Set as default if it's the first connector
         let mut default = self.default_connector.write().await;
         if default.is_none() {
             *default = Some(name.to_string());
@@ -137,7 +135,6 @@ impl SttService {
         results
     }
 
-    /// Create a streaming session for continuous audio processing
     pub async fn create_streaming_session(
         &self,
         session_id: String,
@@ -158,7 +155,6 @@ impl SttService {
             }
         };
 
-        // Check if this is a Deepgram connector that supports streaming
         if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
             deepgram
                 .create_session(session_id, sample_rate, channels, format, language)
@@ -173,7 +169,6 @@ impl SttService {
         Ok(())
     }
 
-    /// Send audio data to a streaming session
     pub async fn send_audio_to_session(&self, session_id: &str, audio_data: Vec<u8>) -> Result<()> {
         let connectors = self.connectors.read().await;
         let default_name = self.default_connector.read().await;
@@ -187,7 +182,6 @@ impl SttService {
             }
         };
 
-        // Check if this is a Deepgram connector that supports streaming
         if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
             deepgram.send_audio(session_id, audio_data).await?;
         } else {
@@ -199,7 +193,6 @@ impl SttService {
         Ok(())
     }
 
-    /// Get transcription from a streaming session
     pub async fn get_session_transcription(
         &self,
         session_id: &str,
@@ -216,7 +209,6 @@ impl SttService {
             }
         };
 
-        // Check if this is a Deepgram connector that supports streaming
         if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
             deepgram.get_transcription(session_id).await
         } else {
@@ -226,7 +218,6 @@ impl SttService {
         }
     }
 
-    /// Close a streaming session
     pub async fn close_streaming_session(&self, session_id: &str) -> Result<()> {
         let connectors = self.connectors.read().await;
         let default_name = self.default_connector.read().await;
@@ -240,7 +231,6 @@ impl SttService {
             }
         };
 
-        // Check if this is a Deepgram connector that supports streaming
         if let Some(deepgram) = connector.as_any().downcast_ref::<DeepgramSttConnector>() {
             deepgram.close_session(session_id).await?;
             info!("Closed streaming session: {}", session_id);
@@ -253,7 +243,6 @@ impl SttService {
         Ok(())
     }
 
-    /// Get or create a session state for buffering early media events
     async fn get_or_create_session_state(&self, session_id: String) -> Arc<Mutex<SessionState>> {
         let mut states = self.session_states.write().await;
 
@@ -266,7 +255,6 @@ impl SttService {
         }
     }
 
-    /// Create streaming session and flush buffered audio
     async fn establish_streaming_session(
         &self,
         session_id: String,
@@ -286,27 +274,23 @@ impl SttService {
             }
         };
 
-        // Create the streaming session
         self.create_streaming_session(
             session_id.clone(),
             media_payload.media_format.sample_rate,
             media_payload.media_format.channels,
             audio_format.clone(),
-            None, // language
+            None,
         )
         .await?;
 
-        // Get session state and flush buffered audio
         let session_state = self.get_or_create_session_state(session_id.clone()).await;
         let mut state = session_state.lock().await;
 
-        // Mark session as established
         state.is_established = true;
         state.audio_format = Some(audio_format);
         state.sample_rate = Some(media_payload.media_format.sample_rate);
         state.channels = Some(media_payload.media_format.channels);
 
-        // Send all buffered audio data
         for audio_data in state.buffered_audio.drain(..) {
             if let Err(e) = self.send_audio_to_session(&session_id, audio_data).await {
                 error!(
@@ -325,7 +309,6 @@ impl SttService {
         Ok(())
     }
 
-    /// Remove session state when session ends
     async fn remove_session_state(&self, session_id: &str) {
         let mut states = self.session_states.write().await;
         states.remove(session_id);
@@ -437,7 +420,7 @@ async fn handle_session_start(service: Arc<SttService>, event: ProcessingEvent) 
                 sample_rate,
                 channels,
                 audio_format,
-                None, // language
+                None,
             )
             .await
         {
@@ -524,6 +507,10 @@ async fn poll_transcriptions(service: Arc<SttService>, queue: EventQueue) {
                         let mut session = session_conn.lock().await;
 
                         while let Ok(transcription) = session.transcription_rx.try_recv() {
+                            if transcription.text.is_empty() {
+                                continue;
+                            }
+
                             let response_payload = serde_json::json!({
                                 "transcription": transcription,
                                 "timestamp": chrono::Utc::now().timestamp_millis()
@@ -551,7 +538,6 @@ async fn poll_transcriptions(service: Arc<SttService>, queue: EventQueue) {
 
                             let subject = format!("STT_OUTPUT.session.{}", session_id);
 
-                            // Publish to LLM service
                             if let Err(e) = queue.publish_event(&subject, response_event).await {
                                 error!("Failed to publish transcription to LLM service: {}", e);
                             }

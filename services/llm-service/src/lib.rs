@@ -1,19 +1,18 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use meshag_connectors::{ChatMessage, LlmConnector, LlmRequest, MessageRole};
-use meshag_service_common::{HealthCheck, ServiceState};
+use meshag_service_common::ServiceState;
 use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 pub struct LlmService {
     connectors: Arc<RwLock<HashMap<String, Arc<dyn LlmConnector>>>>,
     default_connector: Arc<RwLock<Option<String>>>,
-    conversations: Arc<RwLock<HashMap<Uuid, Vec<ChatMessage>>>>,
+    conversations: Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
 }
 
 impl LlmService {
@@ -29,7 +28,6 @@ impl LlmService {
         let mut connectors = self.connectors.write().await;
         connectors.insert(name.to_string(), connector);
 
-        // Set as default if it's the first connector
         let mut default = self.default_connector.write().await;
         if default.is_none() {
             *default = Some(name.to_string());
@@ -74,25 +72,22 @@ impl LlmService {
             .await
     }
 
-    pub async fn add_message(&self, conversation_id: Uuid, message: ChatMessage) {
+    pub async fn add_message(&self, session_id: String, message: ChatMessage) {
         let mut conversations = self.conversations.write().await;
         conversations
-            .entry(conversation_id)
+            .entry(session_id.clone())
             .or_insert_with(Vec::new)
             .push(message);
     }
 
-    pub async fn get_conversation(&self, conversation_id: Uuid) -> Vec<ChatMessage> {
+    pub async fn get_conversation(&self, session_id: String) -> Vec<ChatMessage> {
         let conversations = self.conversations.read().await;
-        conversations
-            .get(&conversation_id)
-            .cloned()
-            .unwrap_or_default()
+        conversations.get(&session_id).cloned().unwrap_or_default()
     }
 
-    pub async fn clear_conversation(&self, conversation_id: Uuid) {
+    pub async fn clear_conversation(&self, session_id: String) {
         let mut conversations = self.conversations.write().await;
-        conversations.remove(&conversation_id);
+        conversations.remove(&session_id);
     }
 
     pub async fn list_connectors(&self) -> Vec<String> {
@@ -157,7 +152,7 @@ async fn handle_transcription(
         timestamp: chrono::Utc::now(),
     };
     service
-        .add_message(event.conversation_id, user_message)
+        .add_message(event.session_id.clone(), user_message)
         .await;
 
     let connector_name = event.payload["connector"].as_str();
@@ -169,7 +164,7 @@ async fn handle_transcription(
         }
     };
 
-    let messages = service.get_conversation(event.conversation_id).await;
+    let messages = service.get_conversation(event.session_id.clone()).await;
 
     let llm_request = LlmRequest {
         messages,
@@ -189,12 +184,14 @@ async fn handle_transcription(
                 content: response.text.clone(),
                 timestamp: chrono::Utc::now(),
             };
+            println!("content: {}", response.text);
             service
-                .add_message(event.conversation_id, assistant_message)
+                .add_message(event.session_id.clone(), assistant_message)
                 .await;
 
+            let session_id = event.session_id.clone();
             let output_event = ProcessingEvent {
-                session_id: event.session_id,
+                session_id: session_id.clone(),
                 conversation_id: event.conversation_id,
                 correlation_id: event.correlation_id,
                 event_type: "llm_response_complete".to_string(),
@@ -209,8 +206,8 @@ async fn handle_transcription(
                 source_service: "llm-service".to_string(),
                 target_service: "tts-service".to_string(),
             };
-
-            queue.publish_event("LLM_OUTPUT", output_event).await?;
+            let subject = format!("LLM_OUTPUT.session.{}", session_id);
+            queue.publish_event(&subject, output_event).await?;
         }
         Err(e) => {
             error!("LLM generation failed: {}", e);
@@ -221,8 +218,8 @@ async fn handle_transcription(
 }
 
 async fn handle_conversation_end(service: Arc<LlmService>, event: ProcessingEvent) -> Result<()> {
-    service.clear_conversation(event.conversation_id).await;
-    info!(conversation_id = %event.conversation_id, "LLM conversation ended");
+    service.clear_conversation(event.session_id.clone()).await;
+    info!(session_id = %event.session_id, "LLM conversation ended");
     Ok(())
 }
 

@@ -11,10 +11,8 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     info!("Starting STT Service");
 
-    // Initialize NATS connection
     let event_queue = EventQueue::new("stt-service").await?;
 
-    // Initialize connectors based on environment configuration
     let mut stt_service = SttService::new();
 
     if let Ok(api_key) = std::env::var("DEEPGRAM_API_KEY") {
@@ -23,7 +21,6 @@ async fn main() -> Result<()> {
         info!("Registered Deepgram connector");
     }
 
-    // Start the STT processing loop in the background
     let stt_clone = stt_service.clone();
     let queue_clone = event_queue.clone();
     tokio::spawn(async move {
