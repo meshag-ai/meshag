@@ -243,7 +243,7 @@ impl EventQueue {
                             Ok(msg) => {
                                 match serde_json::from_slice::<ProcessingEvent>(&msg.payload) {
                                     Ok(event) => match callback(event.clone()).await {
-                                        Ok(_) => {
+                                        Ok(()) => {
                                             if let Err(e) = msg.ack().await {
                                                 error!("Failed to ack message: {}", e);
                                             }
@@ -283,11 +283,44 @@ impl EventQueue {
         }
     }
 
-    pub async fn health_check(&self) -> Result<bool> {
-        match self.client.connection_state() {
-            async_nats::connection::State::Connected => Ok(true),
-            _ => Ok(false),
+    pub async fn publish_nats_core(&self, subject: &str, event: ProcessingEvent) -> Result<()> {
+        let payload = serde_json::to_vec(&event)?;
+        self.client
+            .publish(subject.to_string(), payload.into())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn subscribe_nats_core<F, Fut>(&self, subject: String, callback: F) -> Result<()>
+    where
+        F: Fn(ProcessingEvent) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<()>> + Send + 'static,
+    {
+        let mut subscriber = self.client.subscribe(subject.clone()).await?;
+
+        info!(
+            subject = %subject,
+            "Starting NATS Core subscriber"
+        );
+
+        while let Some(message) = subscriber.next().await {
+            match serde_json::from_slice::<ProcessingEvent>(&message.payload) {
+                Ok(event) => {
+                    if let Err(e) = callback(event.clone()).await {
+                        error!(
+                            session_id = %event.session_id,
+                            error = %e,
+                            "Failed to process NATS Core event"
+                        );
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to parse NATS Core event payload: {}", e);
+                }
+            }
         }
+
+        Ok(())
     }
 }
 

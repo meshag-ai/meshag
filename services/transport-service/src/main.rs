@@ -7,14 +7,15 @@ use axum::{
     Router,
 };
 
-use meshag_shared::TwilioMediaFormat;
+use meshag_shared::{ProcessingEvent, TwilioMediaFormat};
 use serde::Deserialize;
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 use transport_service::{TransportServiceConfig, TransportServiceState, WebSocketConnection};
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 struct TwilioWebhookData {
@@ -26,30 +27,22 @@ struct TwilioWebhookData {
     pub to: String,
     #[serde(rename = "CallStatus")]
     pub call_status: String,
-    #[serde(rename = "Direction")]
-    pub direction: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Load environment variables
     dotenvy::dotenv().ok();
 
-    // Load configuration
     let config = TransportServiceConfig::from_env()?;
     info!("Starting transport service");
 
-    // Initialize service state
     let state = TransportServiceState::new(config).await?;
     info!("Transport service initialized successfully");
 
-    // Create the application router
     let app = create_app_router(state.clone());
 
-    // Start the HTTP server
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "8080".to_string())
         .parse::<u16>()
@@ -66,11 +59,8 @@ async fn main() -> Result<()> {
 
 fn create_app_router(state: Arc<TransportServiceState>) -> Router {
     Router::new()
-        // WebSocket endpoint
         .route("/ws", get(websocket_handler))
-        // Twilio endpoint
         .route("/twilio", post(handle_twilio_session))
-        // Health endpoints (from service-common)
         .route(
             "/health",
             get(meshag_service_common::handlers::health_check::<TransportServiceState>),
@@ -83,7 +73,6 @@ async fn handle_twilio_session(
     State(_state): State<Arc<TransportServiceState>>,
     Form(webhook_data): Form<TwilioWebhookData>,
 ) -> Result<Response, AppError> {
-    // Parse Twilio webhook data
     tracing::info!(
         "Received Twilio webhook: CallSid={}, From={}, To={}, Status={}",
         webhook_data.call_sid,
@@ -106,7 +95,6 @@ async fn handle_twilio_session(
         .unwrap())
 }
 
-/// WebSocket handler
 async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(_state): State<Arc<TransportServiceState>>,
@@ -114,7 +102,6 @@ async fn websocket_handler(
     ws.on_upgrade(move |socket| handle_websocket(socket, _state))
 }
 
-/// Handle WebSocket connections
 async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<TransportServiceState>) {
     use axum::extract::ws::Message;
     use futures_util::{SinkExt, StreamExt};
@@ -126,72 +113,108 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
     let (mut sender, mut receiver) = socket.split();
     let _connection = WebSocketConnection::new();
 
-    // Store session information for media events
-    let mut session_info: HashMap<String, serde_json::Value> = HashMap::new();
+    let session_info: Arc<Mutex<HashMap<String, serde_json::Value>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let mut media_format: Option<TwilioMediaFormat> = None;
 
-    // Channel for NATS responses to WebSocket
     let (tx, mut rx) = mpsc::channel::<String>(100);
 
     info!("WebSocket connection established");
 
-    // Start NATS consumer task
     let state_clone = state.clone();
     let tx_clone = tx.clone();
+    let session_info_clone = session_info.clone();
+
     tokio::spawn(async move {
         let event_queue = state_clone.event_queue.clone();
-        let stream_config = meshag_shared::StreamConfig::tts_output();
         let subject = format!("TTS_OUTPUT.session.{}", session_id);
+        let event = ProcessingEvent {
+            session_id: session_id.to_string(),
+            conversation_id: Uuid::new_v4(),
+            correlation_id: Uuid::new_v4(),
+            event_type: "session_start".to_string(),
+            payload: serde_json::Value::Null,
+            timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+            source_service: "transport-service".to_string(),
+            target_service: "transport-service".to_string(),
+        };
 
-        if let Err(e) = event_queue.consume_events(stream_config, subject, move |event| {
-            let tx = tx_clone.clone();
+        let _ = event_queue.publish_nats_core(&subject, event).await;
+        if let Err(e) = event_queue
+            .subscribe_nats_core(subject, move |event| {
+                let tx = tx_clone.clone();
+                let session_info = session_info_clone.clone();
 
-            async move {
-                if let Some(payload) = event.payload.get("session_id") {
-                    if let Some(session_id) = payload.as_str() {
-                        // Parse response payload
-                        if let Ok(response_payload) = serde_json::from_value::<transport_service::ResponseEventPayload>(event.payload.clone()) {
+                async move {
+                    match serde_json::from_value::<transport_service::EventPayload>(
+                        event.payload.clone(),
+                    ) {
+                        Ok(response_payload) => {
+                            let stream_sid = {
+                                let session_info_guard = session_info.lock().unwrap();
+                                session_info_guard
+                                    .get("stream_sid")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string()
+                            };
+
                             tracing::info!(
-                                session_id = %session_id,
-                                response_type = %response_payload.response_type,
+                                session_id = %event.session_id,
+                                response_type = %event.event_type,
+                                stream_sid = stream_sid,
                                 "Received response event for WebSocket"
                             );
 
-                            // Create Twilio media message for outbound audio
                             let media_message = serde_json::json!({
                                 "event": "media",
-                                "streamSid": response_payload.call_sid,
+                                "streamSid": stream_sid,
                                 "media": {
                                     "track": "outbound",
                                     "chunk": "1",
                                     "timestamp": chrono::Utc::now().timestamp_millis().to_string(),
-                                    "payload": response_payload.data
+                                    "payload": response_payload.audio_data
                                 }
                             });
 
-                            if let Ok(message_text) = serde_json::to_string(&media_message) {
-                                if let Err(e) = tx.send(message_text).await {
-                                    tracing::error!("Failed to send response to WebSocket channel: {}", e);
+                            match serde_json::to_string(&media_message) {
+                                Ok(message_text) => match tx.send(message_text).await {
+                                    Ok(_) => {
+                                        tracing::debug!(
+                                            "Successfully sent response to WebSocket channel"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to send response to WebSocket channel: {}",
+                                            e
+                                        );
+                                    }
+                                },
+                                Err(e) => {
+                                    tracing::error!("Failed to serialize media message: {}", e);
                                 }
                             }
                         }
+                        Err(e) => {
+                            tracing::error!("Failed to deserialize response event: {}", e);
+                        }
                     }
+
+                    Ok(())
                 }
-                Ok(())
-            }
-        }).await {
+            })
+            .await
+        {
             tracing::error!("NATS consumer error: {}", e);
         }
     });
 
-    // Handle both WebSocket messages and NATS responses concurrently
     loop {
         tokio::select! {
-            // Handle incoming WebSocket messages
             msg = receiver.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        // First try to parse as Twilio event
                         if let Ok(twilio_event) = serde_json::from_str::<serde_json::Value>(&text) {
                             if let Some(event_type) = twilio_event.get("event").and_then(|e| e.as_str()) {
                                 match event_type {
@@ -227,9 +250,11 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                                                 ).unwrap_or_default()
                                             );
 
-                                            session_info.insert("call_sid".to_string(), call_sid.into());
-                                            session_info
-                                                .insert("stream_sid".to_string(), stream_sid.into());
+                                            {
+                                                let mut session_info_guard = session_info.lock().unwrap();
+                                                session_info_guard.insert("call_sid".to_string(), call_sid.into());
+                                                session_info_guard.insert("stream_sid".to_string(), stream_sid.into());
+                                            }
 
 
                                             if let Some(format_data) = start_data.get("mediaFormat") {
@@ -271,9 +296,17 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                                                 .unwrap_or("");
 
 
+                                            let (call_sid, stream_sid) = {
+                                                let session_info_guard = session_info.lock().unwrap();
+                                                (
+                                                    session_info_guard.get("call_sid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                    session_info_guard.get("stream_sid").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                                )
+                                            };
+
                                             if let (Some(call_sid), Some(stream_sid), Some(format)) = (
-                                                session_info.get("call_sid").and_then(|v| v.as_str()),
-                                                session_info.get("stream_sid").and_then(|v| v.as_str()),
+                                                call_sid.as_deref(),
+                                                stream_sid.as_deref(),
                                                 &media_format,
                                             ) {
                                                 if let Err(e) = state
@@ -321,7 +354,6 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                     _ => {}
                 }
             }
-            // Handle NATS responses
             response = rx.recv() => {
                 match response {
                     Some(message_text) => {
@@ -342,7 +374,6 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
     info!("WebSocket connection ended");
 }
 
-/// Application error type
 #[derive(Debug)]
 struct AppError(anyhow::Error);
 

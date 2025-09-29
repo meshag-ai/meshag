@@ -13,8 +13,6 @@ pub use transport::{
 pub use tts::{TtsConnector, TtsRequest, TtsResponse, Voice};
 
 pub use providers::{
-    anthropic::{Anthropic, AnthropicConfig},
-    azure::{Azure, AzureConfig},
     daily::{Daily, DailyConfig},
     deepgram::{Deepgram, DeepgramConfig},
     elevenlabs::{ElevenLabs, ElevenLabsConfig},

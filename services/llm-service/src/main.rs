@@ -11,13 +11,10 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     info!("Starting LLM Service");
 
-    // Initialize NATS connection
     let event_queue = EventQueue::new("llm-service").await?;
 
-    // Initialize connectors based on environment configuration
     let mut llm_service = LlmService::new();
 
-    // Add OpenAI connector if API key is available
     if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
         let mut config = OpenAIConfig::new(api_key);
         if let Ok(base_url) = std::env::var("OPENAI_BASE_URL") {
@@ -30,13 +27,6 @@ async fn main() -> Result<()> {
         info!("Registered OpenAI connector");
     }
 
-    // TODO: Add other connectors based on environment variables
-    // if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-    //     let anthropic = AnthropicConnector::new(api_key);
-    //     llm_service.register_connector("anthropic", Box::new(anthropic));
-    // }
-
-    // Start the LLM processing loop in the background
     let llm_clone = llm_service.clone();
     let queue_clone = event_queue.clone();
     tokio::spawn(async move {

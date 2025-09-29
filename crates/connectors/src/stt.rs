@@ -41,7 +41,5 @@ pub trait SttConnector: Send + Sync {
 
     fn supported_languages(&self) -> Option<Vec<String>>;
 
-    fn config_schema(&self) -> serde_json::Value;
-
     fn as_any(&self) -> &dyn std::any::Any;
 }
