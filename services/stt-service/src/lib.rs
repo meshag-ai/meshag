@@ -4,7 +4,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use meshag_connectors::providers::deepgram::DeepgramSttConnector;
 use meshag_connectors::{AudioFormat, SttConnector};
 use meshag_orchestrator::ServiceRouter;
-use meshag_service_common::{HealthCheck, ServiceState};
+use meshag_service_common::ServiceState;
 use meshag_shared::MediaEventPayload;
 use meshag_shared::{EventQueue, ProcessingEvent};
 use std::collections::HashMap;

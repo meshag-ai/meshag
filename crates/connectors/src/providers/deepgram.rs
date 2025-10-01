@@ -17,11 +17,7 @@ struct DeepgramResponse {
     #[serde(rename = "type")]
     response_type: String,
     channel: Option<DeepgramChannel>,
-    duration: Option<f64>,
-    is_final: Option<bool>,
-    speech_final: Option<bool>,
     metadata: Option<DeepgramMetadata>,
-    start: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -33,22 +29,11 @@ struct DeepgramChannel {
 struct DeepgramAlternative {
     confidence: f32,
     transcript: String,
-    words: Option<Vec<DeepgramWord>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DeepgramWord {
-    confidence: f32,
-    end: f64,
-    punctuated_word: String,
-    start: f64,
-    word: String,
 }
 
 #[derive(Debug, Deserialize)]
 struct DeepgramMetadata {
     model_info: Option<DeepgramModelInfo>,
-    model_uuid: Option<String>,
     request_id: Option<String>,
 }
 

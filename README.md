@@ -73,15 +73,15 @@ MeshAG is a distributed AI agent orchestrator that enables seamless coordination
 
 | Service | Port | Purpose | AI Providers | Configuration |
 |---------|------|---------|-------------|---------------|
-| **STT Service** | 8081 | Speech-to-Text | OpenAI Whisper, Deepgram | Valkey + Self-routing |
-| **LLM Service** | 8082 | Language Model | OpenAI GPT, Anthropic Claude | Valkey + Self-routing |
-| **TTS Service** | 8083 | Text-to-Speech | ElevenLabs, Azure Speech | Valkey + Self-routing |
-| **Transport Service** | 8084 | WebRTC Transport | Daily.co | Valkey + Session Management |
+| **STT Service** | 8081 | Speech-to-Text | Deepgram | Valkey + Self-routing |
+| **LLM Service** | 8082 | Language Model | OpenAI GPT | Valkey + Self-routing |
+| **TTS Service** | 8083 | Text-to-Speech | ElevenLabs | Valkey + Self-routing |
+| **Transport Service** | 8084 | WebRTC Transport | Twilio | Valkey + Session Management |
 
 ## ⚡ Key Features
 
 - **Event-Driven Orchestration**: NATS JetStream for ultra-high-performance agent coordination
-- **Valkey Configuration Storage**: Redis-compatible key-value store for dynamic configuration management
+- **Valkey Configuration Storage**: Redis-compatible key-value store for dynamic configuration management (**under dev**)
 - **Self-Routing Services**: Each service determines its next consumer based on stored configuration
 - **WebRTC Integration**: Real-time audio/video communication via Daily.co
 - **Pluggable AI Providers**: Easy switching between AI providers (OpenAI, ElevenLabs, etc.)

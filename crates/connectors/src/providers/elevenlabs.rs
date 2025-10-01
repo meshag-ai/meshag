@@ -79,8 +79,7 @@ impl TtsConnector for ElevenLabsTtsConnector {
 
         let mut payload = json!({
             "text": request.text,
-            "model_id": "eleven_multilingual_v2",
-            "output_format": output_format
+            "model_id": "eleven_multilingual_v2"
         });
 
         let mut voice_settings = json!({});
@@ -102,11 +101,13 @@ impl TtsConnector for ElevenLabsTtsConnector {
 
         payload["voice_settings"] = voice_settings;
 
-        let url = format!("{}/text-to-speech/{}", self.config.base_url, voice_id);
+        let url = format!(
+            "{}/text-to-speech/{}?output_format={}",
+            self.config.base_url, voice_id, output_format
+        );
         let response = self
             .client
             .post(&url)
-            .header("Accept", "audio/mpeg")
             .header("Content-Type", "application/json")
             .header("xi-api-key", &self.config.api_key)
             .json(&payload)
