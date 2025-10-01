@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use meshag_shared::{ProcessingEvent, TwilioMediaFormat};
 use serde::Deserialize;
 use serde_json::json;
@@ -173,7 +174,7 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                                     "track": "outbound",
                                     "chunk": "1",
                                     "timestamp": chrono::Utc::now().timestamp_millis().to_string(),
-                                    "payload": response_payload.audio_data
+                                    "payload": STANDARD.encode(&response_payload.audio_data)
                                 }
                             });
 

@@ -167,8 +167,8 @@ impl EventQueue {
                     Ok(stream)
                 }
                 Err(_) => {
-                    error!("Failed to create or get stream '{}': {}", config.name, e);
-                    Err(anyhow::anyhow!("Stream creation failed: {}", e))
+                    error!("Failed to create or get stream '{}': {e}", config.name);
+                    Err(anyhow::anyhow!("Stream creation failed: {e}"))
                 }
             },
         }
@@ -197,7 +197,7 @@ impl EventQueue {
 
         let consumer_config = jetstream::consumer::pull::Config {
             durable_name: Some(self.consumer_name.clone()),
-            description: Some(format!("Consumer for {} processing", subject)),
+            description: Some(format!("Consumer for {subject} processing")),
             deliver_policy: jetstream::consumer::DeliverPolicy::New,
             ack_policy: jetstream::consumer::AckPolicy::Explicit,
             ack_wait: std::time::Duration::from_secs(30),

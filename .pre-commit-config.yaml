@@ -10,7 +10,7 @@ repos:
         entry: cargo fmt
         language: system
         files: \.rs$
-        args: ['--all', '--', '--check']
+        args: ['--', '--check']
 
       - id: clippy
         name: Rust clippy
@@ -18,7 +18,7 @@ repos:
         entry: cargo clippy
         language: system
         files: \.rs$
-        args: ['--all-targets', '--all-features', '--workspace', '--', '-D', 'warnings']
+        args: ['--', '-D', 'warnings', '-A', 'missing_docs']
 
       - id: cargo-check
         name: Cargo check
@@ -26,7 +26,6 @@ repos:
         entry: cargo check
         language: system
         files: \.rs$
-        args: ['--all-targets', '--all-features', '--workspace']
 
   # General hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks

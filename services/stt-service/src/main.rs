@@ -1,5 +1,5 @@
 use anyhow::Result;
-use meshag_connectors::{Deepgram, DeepgramConfig, OpenAI, OpenAIConfig};
+use meshag_connectors::{Deepgram, DeepgramConfig};
 use meshag_service_common::server;
 use meshag_shared::EventQueue;
 use std::sync::Arc;
