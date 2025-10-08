@@ -10,7 +10,7 @@ on:
       build_all:
         description: 'Build all services'
         required: false
-        default: 'true'
+        default: true
         type: boolean
 
 env:
@@ -100,7 +100,8 @@ jobs:
 
     - name: Output base image digest
       if: github.event_name != 'pull_request'
-      run: echo "Base image digest: ${{ steps.build-base.outputs.digest }}"
+      run: |
+        echo "Base image digest: ${{ steps.build-base.outputs.digest }}"
 
   build-services:
     needs: [detect-changes, build-base]
@@ -178,7 +179,8 @@ jobs:
 
     - name: Output service image digest
       if: github.event_name != 'pull_request'
-      run: echo "Service image digest: ${{ steps.build-service.outputs.digest }}"
+      run: |
+        echo "Service image digest: ${{ steps.build-service.outputs.digest }}"
 
   security-scan:
     needs: [detect-changes, build-services]
