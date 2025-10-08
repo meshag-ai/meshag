@@ -170,8 +170,6 @@ impl ServiceRouter {
             event_type: event.stream.clone(),
             payload: event.payload,
             timestamp_ms: event.timestamp.timestamp_millis() as u64,
-            source_service: event.source_service.clone(),
-            target_service: event.target_service.clone(),
         };
 
         // Create subject based on target service and stream

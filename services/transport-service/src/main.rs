@@ -8,7 +8,7 @@ use axum::{
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use meshag_shared::{ProcessingEvent, TwilioMediaFormat};
+use meshag_shared::{ProcessingEvent, SubjectName, TwilioMediaFormat};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -128,7 +128,9 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
 
     tokio::spawn(async move {
         let event_queue = state_clone.event_queue.clone();
-        let subject = format!("TTS_OUTPUT.session.{}", session_id);
+        let subject = SubjectName::TransportSubject
+            .as_str(Some(session_id.to_string()))
+            .to_string();
         let event = ProcessingEvent {
             session_id: session_id.to_string(),
             conversation_id: Uuid::new_v4(),
@@ -136,8 +138,6 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
             event_type: "session_start".to_string(),
             payload: serde_json::Value::Null,
             timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-            source_service: "transport-service".to_string(),
-            target_service: "transport-service".to_string(),
         };
 
         let _ = event_queue.publish_nats_core(&subject, event).await;

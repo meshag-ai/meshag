@@ -6,7 +6,7 @@ use meshag_connectors::{AudioFormat, SttConnector};
 use meshag_orchestrator::ServiceRouter;
 use meshag_service_common::ServiceState;
 use meshag_shared::MediaEventPayload;
-use meshag_shared::{EventQueue, ProcessingEvent};
+use meshag_shared::{EventQueue, ProcessingEvent, StreamType, SubjectName};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -84,19 +84,22 @@ impl SttService {
     }
 
     pub async fn start_processing(&self, queue: EventQueue) -> Result<()> {
-        info!("STT service starting to consume from AUDIO_INPUT");
+        info!(
+            "STT service starting to consume from {}",
+            StreamType::STTStream.as_str()
+        );
 
         let service = Arc::new(self.clone());
         let queue_clone = queue.clone();
 
         tokio::spawn(async move {
             let q_clone = queue_clone.clone();
-            let stream_config = meshag_shared::StreamConfig::audio_input();
+            let stream_config = meshag_shared::StreamConfig::stt_stream();
 
             if let Err(e) = queue_clone
                 .consume_events(
                     stream_config,
-                    "AUDIO_INPUT.session.*".to_string(),
+                    SubjectName::STTSubject.as_str(None).to_string(),
                     move |event| {
                         let svc = Arc::clone(&service);
                         let q = q_clone.clone();
@@ -532,11 +535,10 @@ async fn poll_transcriptions(service: Arc<SttService>, queue: EventQueue) {
                                 event_type: "transcription_output".to_string(),
                                 payload: response_payload,
                                 timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-                                source_service: "stt-service".to_string(),
-                                target_service: "llm-service".to_string(),
                             };
 
-                            let subject = format!("STT_OUTPUT.session.{}", session_id);
+                            let subject =
+                                SubjectName::LLMSubject.as_str(Some(session_id.to_string()));
 
                             if let Err(e) = queue.publish_event(&subject, response_event).await {
                                 error!("Failed to publish transcription to LLM service: {}", e);

@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use meshag_connectors::{ChatMessage, LlmConnector, LlmRequest, MessageRole};
 use meshag_service_common::ServiceState;
-use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
+use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig, StreamType, SubjectName};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -54,14 +54,17 @@ impl LlmService {
     }
 
     pub async fn start_processing(&self, queue: EventQueue) -> Result<()> {
-        info!("LLM service starting to consume from STT_OUTPUT");
+        info!(
+            "LLM service starting to consume from {}",
+            StreamType::LLMStream.as_str()
+        );
 
         let service = Arc::new(self.clone());
         let q_clone = queue.clone();
-        let subject = "STT_OUTPUT.session.*";
+        let subject = SubjectName::LLMSubject.as_str(None);
         queue
             .consume_events(
-                StreamConfig::stt_output(),
+                StreamConfig::llm_stream(),
                 subject.to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
@@ -203,10 +206,8 @@ async fn handle_transcription(
                     "provider": connector.provider_name()
                 }),
                 timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-                source_service: "llm-service".to_string(),
-                target_service: "tts-service".to_string(),
             };
-            let subject = format!("LLM_OUTPUT.session.{}", session_id);
+            let subject = SubjectName::TTSSubject.as_str(Some(session_id.clone()));
             queue.publish_event(&subject, output_event).await?;
         }
         Err(e) => {

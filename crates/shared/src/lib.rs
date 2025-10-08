@@ -5,6 +5,6 @@
 pub mod queue;
 
 pub use queue::{
-    EventQueue, MediaEventPayload, ProcessingEvent, StreamConfig, StreamMetrics, TwilioMediaData,
-    TwilioMediaFormat, TwilioStartData,
+    EventQueue, MediaEventPayload, ProcessingEvent, StreamConfig, StreamMetrics, StreamType,
+    SubjectName, TwilioMediaData, TwilioMediaFormat, TwilioStartData,
 };

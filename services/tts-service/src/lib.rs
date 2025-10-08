@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use meshag_connectors::{TtsConnector, TtsRequest};
 use meshag_service_common::ServiceState;
-use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig};
+use meshag_shared::{EventQueue, ProcessingEvent, StreamConfig, StreamType, SubjectName};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,14 +50,17 @@ impl TtsService {
     }
 
     pub async fn start_processing(&self, queue: EventQueue) -> Result<()> {
-        info!("TTS service starting to consume from LLM_OUTPUT");
+        info!(
+            "TTS service starting to consume from {}",
+            StreamType::TTSStream.as_str()
+        );
 
         let service = Arc::new(self.clone());
         let q_clone = queue.clone();
         queue
             .consume_events(
-                StreamConfig::llm_output(),
-                "LLM_OUTPUT.session.*".to_string(),
+                StreamConfig::tts_stream(),
+                SubjectName::TTSSubject.as_str(None).to_string(),
                 move |event| {
                     let svc = Arc::clone(&service);
                     let q = q_clone.clone();
@@ -153,8 +156,6 @@ async fn handle_llm_response(
                     "provider": connector.provider_name()
                 }),
                 timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-                source_service: "tts-service".to_string(),
-                target_service: "transport-service".to_string(),
             };
 
             info!(
@@ -163,7 +164,7 @@ async fn handle_llm_response(
                 "Publishing TTS output event"
             );
 
-            let subject = format!("TTS_OUTPUT.session.{}", session_id);
+            let subject = SubjectName::TransportSubject.as_str(Some(session_id.to_string()));
             queue.publish_nats_core(&subject, output_event).await?;
         }
         Err(e) => {

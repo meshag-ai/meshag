@@ -1,0 +1,32 @@
+# Shared base Dockerfile for all services
+# This reduces duplication and improves build caching
+
+# Build stage - shared across all services
+FROM rustlang/rust:nightly-bookworm AS builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy dependency files first for better caching
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ ./crates/
+COPY services/ ./services/
+
+# Create dummy main.rs files to build dependencies
+RUN for service in stt-service llm-service tts-service transport-service; do \
+    mkdir -p services/${service}/src && \
+    echo 'fn main() {}' > services/${service}/src/main.rs && \
+    echo 'fn main() {}' > services/${service}/src/lib.rs; \
+    done
+
+# Build all dependencies (this layer will be cached)
+RUN cargo build --release --workspace
+
+# Remove dummy files
+RUN rm -rf services/*/src/main.rs services/*/src/lib.rs
