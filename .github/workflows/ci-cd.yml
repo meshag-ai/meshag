@@ -94,9 +94,9 @@ jobs:
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha,scope=base
+        cache-to: type=gha,mode=max,scope=base
+        platforms: linux/amd64
 
     - name: Output base image digest
       if: github.event_name != 'pull_request'
@@ -140,7 +140,7 @@ jobs:
 
     - name: Pull base image
       run: |
-        # Try to pull the base image, fallback to building if not available
+        # Try to pull the base image
         docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:latest || \
         docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:${{ github.sha }} || \
         docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:${{ needs.detect-changes.outputs.version }} || \
@@ -170,9 +170,9 @@ jobs:
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha,scope=${{ matrix.service }}
+        cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+        platforms: linux/amd64
         build-args: |
           SERVICE_NAME=${{ matrix.service }}
           PORT=${{ matrix.port }}
@@ -180,7 +180,7 @@ jobs:
     - name: Output service image digest
       if: github.event_name != 'pull_request'
       run: |
-        echo "Service image digest: ${{ steps.build-service.outputs.digest }}"
+        echo "Service image digest for ${{ matrix.service }}: ${{ steps.build-service.outputs.digest }}"
 
   security-scan:
     needs: [detect-changes, build-services]
