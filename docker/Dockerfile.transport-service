@@ -1,5 +1,5 @@
 # Optimized Transport Service using shared base image
-FROM meshag-base:latest AS builder
+FROM ghcr.io/meshag-ai/meshag/meshag-base:latest AS builder
 
 # Copy actual source code
 COPY . .
