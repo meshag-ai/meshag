@@ -44,9 +44,7 @@ services:
 
   # STT Service - Speech-to-Text with configurable providers
   stt-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.stt-service
+    image: ghcr.io/meshag-ai/meshag/stt-service:latest
     container_name: meshag-stt-service
     ports:
       - "8081:8081"
@@ -77,9 +75,7 @@ services:
 
   # LLM Service - Language Model with configurable providers
   llm-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.llm-service
+    image: ghcr.io/meshag-ai/meshag/llm-service:latest
     container_name: meshag-llm-service
     ports:
       - "8082:8082"
@@ -110,9 +106,7 @@ services:
 
   # TTS Service - Text-to-Speech with configurable providers
   tts-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.tts-service
+    image: ghcr.io/meshag-ai/meshag/tts-service:latest
     container_name: meshag-tts-service
     ports:
       - "8083:8083"
@@ -143,9 +137,7 @@ services:
 
   # Transport Service - WebRTC transport with Daily.co
   transport-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.transport-service
+    image: ghcr.io/meshag-ai/meshag/transport-service:latest
     container_name: transport-service
     ports:
       - "8084:8084"

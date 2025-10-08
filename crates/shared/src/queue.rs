@@ -13,8 +13,6 @@ pub struct ProcessingEvent {
     pub event_type: String,
     pub payload: serde_json::Value,
     pub timestamp_ms: u64,
-    pub source_service: String,
-    pub target_service: String,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -61,23 +59,59 @@ pub struct StreamConfig {
     pub max_age: std::time::Duration,
 }
 
-impl StreamConfig {
-    #[must_use]
-    pub fn sessions() -> Self {
-        Self {
-            name: "SESSIONS".to_string(),
-            subjects: vec!["SESSIONS".to_string()],
-            max_messages: 10_000,
-            max_bytes: 10_000_000,                         // 10MB
-            max_age: std::time::Duration::from_secs(3600), // 1 hour
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StreamType {
+    STTStream,
+    LLMStream,
+    TTSStream,
+}
+
+impl StreamType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StreamType::STTStream => "STT_STREAM",
+            StreamType::LLMStream => "LLM_STREAM",
+            StreamType::TTSStream => "TTS_STREAM",
         }
     }
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SubjectName {
+    STTSubject,
+    LLMSubject,
+    TTSSubject,
+    TransportSubject,
+}
+
+impl SubjectName {
+    pub fn as_str(&self, session_id: Option<String>) -> &'static str {
+        let subject = match self {
+            SubjectName::STTSubject => "STT_SUBJECT.session.{session_id}",
+            SubjectName::LLMSubject => "LLM_SUBJECT.session.{session_id}",
+            SubjectName::TTSSubject => "TTS_SUBJECT.session.{session_id}",
+            SubjectName::TransportSubject => "TRANSPORT_SUBJECT.session.{session_id}",
+        };
+
+        match session_id {
+            Some(session_id) => {
+                let subject_str = subject.replace("{session_id}", &session_id);
+                Box::leak(subject_str.into_boxed_str())
+            }
+            None => {
+                let subject_str = subject.replace("{session_id}", "*");
+                Box::leak(subject_str.into_boxed_str())
+            }
+        }
+    }
+}
+
+impl StreamConfig {
     #[must_use]
-    pub fn audio_input() -> Self {
+    pub fn stt_stream() -> Self {
         Self {
-            name: "AUDIO_INPUT".to_string(),
-            subjects: vec!["AUDIO_INPUT.session.*".to_string()],
+            name: StreamType::STTStream.as_str().to_string(),
+            subjects: vec![SubjectName::STTSubject.as_str(None).to_string()],
             max_messages: 100_000,
             max_bytes: 100_000_000,                       // 100MB
             max_age: std::time::Duration::from_secs(300), // 5 minutes
@@ -85,10 +119,10 @@ impl StreamConfig {
     }
 
     #[must_use]
-    pub fn stt_output() -> Self {
+    pub fn llm_stream() -> Self {
         Self {
-            name: "STT_OUTPUT".to_string(),
-            subjects: vec!["STT_OUTPUT.session.*".to_string()],
+            name: StreamType::LLMStream.as_str().to_string(),
+            subjects: vec![SubjectName::LLMSubject.as_str(None).to_string()],
             max_messages: 100_000,
             max_bytes: 10_000_000, // 10MB (text is smaller)
             max_age: std::time::Duration::from_secs(600), // 10 minutes
@@ -96,24 +130,13 @@ impl StreamConfig {
     }
 
     #[must_use]
-    pub fn llm_output() -> Self {
+    pub fn tts_stream() -> Self {
         Self {
-            name: "LLM_OUTPUT".to_string(),
-            subjects: vec!["LLM_OUTPUT.session.*".to_string()],
+            name: StreamType::TTSStream.as_str().to_string(),
+            subjects: vec![SubjectName::TTSSubject.as_str(None).to_string()],
             max_messages: 100_000,
             max_bytes: 50_000_000,                        // 50MB
             max_age: std::time::Duration::from_secs(600), // 10 minutes
-        }
-    }
-
-    #[must_use]
-    pub fn tts_output() -> Self {
-        Self {
-            name: "TTS_OUTPUT".to_string(),
-            subjects: vec!["TTS_OUTPUT.session.*".to_string()],
-            max_messages: 50_000,
-            max_bytes: 500_000_000, // 500MB (audio is large)
-            max_age: std::time::Duration::from_secs(300), // 5 minutes
         }
     }
 }

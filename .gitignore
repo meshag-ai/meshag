@@ -50,3 +50,5 @@ coverage/
 # Temporary files
 tmp/
 temp/
+venv/
+benchmark/

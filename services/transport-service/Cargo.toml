@@ -28,6 +28,7 @@ tower-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 axum-xml-up = { workspace = true }
+strfmt = { workspace = true }
 
 # HTTP client
 reqwest = { workspace = true }

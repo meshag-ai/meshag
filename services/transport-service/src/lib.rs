@@ -9,8 +9,8 @@ use meshag_connectors::{
 use meshag_orchestrator::{AgentConfig, ConfigStorage};
 use meshag_service_common::ServiceState;
 use meshag_shared::{
-    EventQueue, MediaEventPayload, ProcessingEvent, TwilioMediaData, TwilioMediaFormat,
-    TwilioStartData,
+    EventQueue, MediaEventPayload, ProcessingEvent, SubjectName, TwilioMediaData,
+    TwilioMediaFormat, TwilioStartData,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -460,11 +460,9 @@ impl TransportServiceState {
             event_type: "media_input".to_string(),
             payload: serde_json::to_value(media_payload)?,
             timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-            source_service: "transport-service".to_string(),
-            target_service: "stt-service".to_string(),
         };
 
-        let subject = format!("AUDIO_INPUT.session.{}", session_id);
+        let subject = SubjectName::STTSubject.as_str(Some(session_id.to_string()));
         let message_id = self.event_queue.publish_event(&subject, event).await?;
 
         Ok(message_id)
@@ -478,11 +476,9 @@ impl TransportServiceState {
             event_type: "session_start".to_string(),
             payload: serde_json::Value::Null,
             timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-            source_service: "transport-service".to_string(),
-            target_service: "stt-service".to_string(),
         };
 
-        let subject = format!("AUDIO_INPUT.session.{}", session_id);
+        let subject = SubjectName::STTSubject.as_str(Some(session_id.to_string()));
         let message_id = self.event_queue.publish_event(&subject, event).await?;
 
         Ok(message_id)
@@ -496,8 +492,6 @@ impl TransportServiceState {
             event_type: "session_end".to_string(),
             payload: serde_json::Value::Null,
             timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-            source_service: "transport-service".to_string(),
-            target_service: "stt-service".to_string(),
         };
 
         let subject = format!("AUDIO_INPUT.session.{}", session_id);
