@@ -2,7 +2,7 @@
 # This reduces duplication and improves build caching
 
 # Build stage - shared across all services
-FROM rustlang/rust:nightly-bookworm AS builder
+FROM rust:1.90-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

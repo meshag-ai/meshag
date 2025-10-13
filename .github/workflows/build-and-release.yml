@@ -52,11 +52,15 @@ jobs:
 
   build-base:
     needs: detect-changes
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     if: needs.detect-changes.outputs.base-changed == 'true' || github.event.inputs.build_all == 'true'
     strategy:
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm64
     permissions:
       contents: read
       packages: write
@@ -108,7 +112,7 @@ jobs:
 
   build-services:
     needs: [detect-changes, build-base]
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     if: needs.detect-changes.outputs.services-changed == 'true' || github.event.inputs.build_all == 'true'
     strategy:
       matrix:
@@ -123,6 +127,10 @@ jobs:
             port: 8083
           - service: transport-service
             port: 8084
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm64
     permissions:
       contents: read
       packages: write
