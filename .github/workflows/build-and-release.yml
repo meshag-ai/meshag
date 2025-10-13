@@ -2,13 +2,13 @@ name: Build and Release Images
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
     inputs:
       build_all:
-        description: 'Build all services'
+        description: "Build all services"
         required: false
         default: true
         type: boolean
@@ -25,83 +25,86 @@ jobs:
       services-changed: ${{ steps.changes.outputs.services }}
       version: ${{ steps.version.outputs.version }}
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Get version from Cargo.toml
-      id: version
-      run: |
-        VERSION=$(grep '^version = ' services/stt-service/Cargo.toml | cut -d'"' -f2)
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Service version: $VERSION"
+      - name: Get version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' services/stt-service/Cargo.toml | cut -d'"' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Service version: $VERSION"
 
-    - name: Detect changes
-      id: changes
-      uses: dorny/paths-filter@v2
-      with:
-        filters: |
-          base:
-            - 'Cargo.toml'
-            - 'Cargo.lock'
-            - 'crates/**'
-            - 'services/**'
-            - 'docker/Dockerfile.base'
-          services:
-            - 'services/**'
-            - 'docker/Dockerfile.*-service'
+      - name: Detect changes
+        id: changes
+        uses: dorny/paths-filter@v2
+        with:
+          filters: |
+            base:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/**'
+              - 'services/**'
+              - 'docker/Dockerfile.base'
+            services:
+              - 'services/**'
+              - 'docker/Dockerfile.*-service'
 
   build-base:
     needs: detect-changes
     runs-on: ubuntu-latest
     if: needs.detect-changes.outputs.base-changed == 'true' || github.event.inputs.build_all == 'true'
+    strategy:
+      matrix:
+        platform: [linux/amd64, linux/arm64]
     permissions:
       contents: read
       packages: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Log in to Container Registry
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=raw,value=${{ needs.detect-changes.outputs.version }}
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.detect-changes.outputs.version }}
 
-    - name: Build and push base image
-      id: build-base
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./docker/Dockerfile.base
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha,scope=base
-        cache-to: type=gha,mode=max,scope=base
-        platforms: linux/amd64
+      - name: Build and push base image
+        id: build-base
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.base
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=base-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=base-${{ matrix.platform }}
+          platforms: ${{ matrix.platform }}
 
-    - name: Output base image digest
-      if: github.event_name != 'pull_request'
-      run: |
-        echo "Base image digest: ${{ steps.build-base.outputs.digest }}"
+      - name: Output base image digest
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Base image digest: ${{ steps.build-base.outputs.digest }}"
 
   build-services:
     needs: [detect-changes, build-base]
@@ -110,6 +113,7 @@ jobs:
     strategy:
       matrix:
         service: [stt-service, llm-service, tts-service, transport-service]
+        platform: [linux/amd64, linux/arm64]
         include:
           - service: stt-service
             port: 8081
@@ -124,63 +128,63 @@ jobs:
       packages: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Log in to Container Registry
-      if: github.event_name != 'pull_request'
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Pull base image
-      run: |
-        # Try to pull the base image
-        docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:latest || \
-        docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:${{ github.sha }} || \
-        docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:${{ needs.detect-changes.outputs.version }} || \
-        echo "Base image not found, will build from scratch"
+      - name: Pull base image
+        run: |
+          # Try to pull the base image
+          docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:latest || \
+          docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:${{ github.sha }} || \
+          docker pull ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}:${{ needs.detect-changes.outputs.version }} || \
+          echo "Base image not found, will build from scratch"
 
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
-        tags: |
-          type=ref,event=branch
-          type=ref,event=pr
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{major}}
-          type=sha,prefix={{branch}}-
-          type=raw,value=latest,enable={{is_default_branch}}
-          type=raw,value=${{ needs.detect-changes.outputs.version }}
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ needs.detect-changes.outputs.version }}
 
-    - name: Build and push service image
-      id: build-service
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: ./docker/Dockerfile.${{ matrix.service }}
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha,scope=${{ matrix.service }}
-        cache-to: type=gha,mode=max,scope=${{ matrix.service }}
-        platforms: linux/amd64
-        build-args: |
-          SERVICE_NAME=${{ matrix.service }}
-          PORT=${{ matrix.port }}
+      - name: Build and push service image
+        id: build-service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.${{ matrix.service }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}-${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}-${{ matrix.platform }}
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            SERVICE_NAME=${{ matrix.service }}
+            PORT=${{ matrix.port }}
 
-    - name: Output service image digest
-      if: github.event_name != 'pull_request'
-      run: |
-        echo "Service image digest for ${{ matrix.service }}: ${{ steps.build-service.outputs.digest }}"
+      - name: Output service image digest
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Service image digest for ${{ matrix.service }}: ${{ steps.build-service.outputs.digest }}"
 
   security-scan:
     needs: [detect-changes, build-services]
@@ -192,18 +196,18 @@ jobs:
       security-events: write
 
     steps:
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
-      with:
-        image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/stt-service:${{ needs.detect-changes.outputs.version }}
-        format: 'sarif'
-        output: 'trivy-results.sarif'
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ github.repository }}/stt-service:${{ needs.detect-changes.outputs.version }}
+          format: "sarif"
+          output: "trivy-results.sarif"
 
-    - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
-      if: always()
-      with:
-        sarif_file: 'trivy-results.sarif'
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
 
   update-docker-compose:
     needs: [detect-changes, build-services]
@@ -213,23 +217,23 @@ jobs:
       contents: write
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Update docker-compose.yml with new image tags
-      run: |
-        VERSION="${{ needs.detect-changes.outputs.version }}"
-        sed -i "s|image: .*/stt-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/stt-service:$VERSION|g" docker/docker-compose.yml
-        sed -i "s|image: .*/llm-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/llm-service:$VERSION|g" docker/docker-compose.yml
-        sed -i "s|image: .*/tts-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/tts-service:$VERSION|g" docker/docker-compose.yml
-        sed -i "s|image: .*/transport-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/transport-service:$VERSION|g" docker/docker-compose.yml
+      - name: Update docker-compose.yml with new image tags
+        run: |
+          VERSION="${{ needs.detect-changes.outputs.version }}"
+          sed -i "s|image: .*/stt-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/stt-service:$VERSION|g" docker/docker-compose.yml
+          sed -i "s|image: .*/llm-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/llm-service:$VERSION|g" docker/docker-compose.yml
+          sed -i "s|image: .*/tts-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/tts-service:$VERSION|g" docker/docker-compose.yml
+          sed -i "s|image: .*/transport-service:.*|image: ${{ env.REGISTRY }}/${{ github.repository }}/transport-service:$VERSION|g" docker/docker-compose.yml
 
-    - name: Commit updated docker-compose.yml
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add docker/docker-compose.yml
-        git diff --staged --quiet || git commit -m "Update docker-compose.yml with version ${{ needs.detect-changes.outputs.version }}"
-        git push
+      - name: Commit updated docker-compose.yml
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add docker/docker-compose.yml
+          git diff --staged --quiet || git commit -m "Update docker-compose.yml with version ${{ needs.detect-changes.outputs.version }}"
+          git push
