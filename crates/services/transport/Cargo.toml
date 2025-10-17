@@ -1,15 +1,15 @@
 [package]
-name = "transport-service"
+name = "meshag-services-transport"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 # Workspace dependencies
-meshag-shared = { path = "../../crates/shared" }
-meshag-service-common = { path = "../../crates/service-common" }
-meshag-orchestrator = { path = "../../crates/orchestrator" }
+meshag-shared = { path = "../../shared" }
+meshag-service-common = { path = "../../service-common" }
+meshag-orchestrator = { path = "../../orchestrator" }
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
-meshag-connectors = { path = "../../crates/connectors" }
+meshag-connectors = { path = "../../connectors" }
 
 # Async runtime
 tokio = { workspace = true }
@@ -43,7 +43,6 @@ thiserror = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 # Environment
 dotenvy = { workspace = true }
@@ -52,5 +51,3 @@ dotenvy = { workspace = true }
 dashmap = { workspace = true }
 once_cell = { workspace = true }
 
-# Metrics
-prometheus = { workspace = true }

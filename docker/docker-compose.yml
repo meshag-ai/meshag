@@ -54,17 +54,18 @@ services:
   stt-service:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.stt-service
+      dockerfile: docker/Dockerfile
     container_name: meshag-stt-service
     ports:
       - "8081:8081"
     environment:
+      - SERVICE_TYPE=stt
       - RUST_LOG=${RUST_LOG:-info}
       - PORT=8081
       - NATS_URL=nats://nats:4222
       - VALKEY_URL=redis://valkey:6379
       # OpenAI Whisper (Default)
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       # Deepgram (Optional)
       - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
@@ -87,17 +88,18 @@ services:
   llm-service:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.llm-service
+      dockerfile: docker/Dockerfile
     container_name: meshag-llm-service
     ports:
       - "8082:8082"
     environment:
+      - SERVICE_TYPE=llm
       - RUST_LOG=${RUST_LOG:-info}
       - PORT=8082
       - NATS_URL=nats://nats:4222
       - VALKEY_URL=redis://valkey:6379
       # OpenAI GPT (Default)
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       # Anthropic Claude (Optional)
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -120,11 +122,12 @@ services:
   tts-service:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.tts-service
+      dockerfile: docker/Dockerfile
     container_name: meshag-tts-service
     ports:
       - "8083:8083"
     environment:
+      - SERVICE_TYPE=tts
       - RUST_LOG=${RUST_LOG:-info}
       - PORT=8083
       - NATS_URL=nats://nats:4222
@@ -153,13 +156,14 @@ services:
   transport-service:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.transport-service
+      dockerfile: docker/Dockerfile
     container_name: transport-service
     ports:
-      - "8084:8084"
+      - "8080:8080"
     environment:
+      - SERVICE_TYPE=transport
       - RUST_LOG=${RUST_LOG:-info}
-      - PORT=8084
+      - PORT=8080
       - NATS_URL=nats://nats:4222
       - VALKEY_URL=redis://valkey:6379
       # Daily.co Configuration (Required)
@@ -176,7 +180,7 @@ services:
       valkey:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8084/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3

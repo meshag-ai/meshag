@@ -1,0 +1,46 @@
+[package]
+name = "meshag-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+# Meshag crates
+meshag-shared = { path = "../../crates/shared" }
+meshag-connectors = { path = "../../crates/connectors" }
+meshag-service-common = { path = "../../crates/service-common" }
+meshag-orchestrator = { path = "../../crates/orchestrator" }
+
+# Service implementations
+meshag-services-llm = { path = "../../crates/services/llm" }
+meshag-services-stt = { path = "../../crates/services/stt" }
+meshag-services-tts = { path = "../../crates/services/tts" }
+meshag-services-transport = { path = "../../crates/services/transport" }
+
+# Service-specific dependencies
+tracing-subscriber = "0.3"
+strum = { workspace = true }
+strum_macros = { workspace = true }
+base64 = { workspace = true }
+futures-util = { workspace = true }
+tokio-tungstenite = { workspace = true }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+axum-xml-up = { workspace = true }
+strfmt = { workspace = true }
+reqwest = { workspace = true }
+thiserror = { workspace = true }
+dotenvy = { workspace = true }
+dashmap = { workspace = true }
+once_cell = { workspace = true }
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }

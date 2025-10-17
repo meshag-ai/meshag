@@ -6,8 +6,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use meshag_services_transport::{TransportServiceConfig, TransportServiceState, WebSocketConnection};
 use meshag_shared::{ProcessingEvent, SubjectName, TwilioMediaFormat};
 use serde::Deserialize;
 use serde_json::json;
@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
-use transport_service::{TransportServiceConfig, TransportServiceState, WebSocketConnection};
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -30,10 +29,7 @@ struct TwilioWebhookData {
     pub call_status: String,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
+pub async fn run_transport_service() -> Result<()> {
     dotenvy::dotenv().ok();
 
     let config = TransportServiceConfig::from_env()?;
@@ -147,7 +143,7 @@ async fn handle_websocket(socket: axum::extract::ws::WebSocket, state: Arc<Trans
                 let session_info = session_info_clone.clone();
 
                 async move {
-                    match serde_json::from_value::<transport_service::EventPayload>(
+                    match serde_json::from_value::<meshag_services_transport::EventPayload>(
                         event.payload.clone(),
                     ) {
                         Ok(response_payload) => {

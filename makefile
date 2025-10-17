@@ -8,13 +8,21 @@ else
     export
 endif
 
-.PHONY: nats valkey infra up load-env transport stt llm tts all
+.PHONY: nats valkey infra up load-env transport stt llm tts all build-service clean help
 
 up:
-	cd docker && docker-compose up --build
+	cd docker && docker compose down
+	cd docker && docker compose up --build
 
 load-env:
-	@powershell -Command "if (Test-Path '.env') { Get-Content '.env' | Where-Object { $$_ -notmatch '^#' -and $$_ -ne '' } | ForEach-Object { $$key, $$value = $$_ -split '=', 2; [Environment]::SetEnvironmentVariable($$key, $$value, 'Process') }; Write-Host 'Environment variables loaded successfully' } else { Write-Host 'Error: .env file not found'; exit 1 }"
+	@if [ -f .env ]; then \
+		echo "Loading environment variables from .env file..."; \
+		export $$(grep -v '^#' .env | grep -v '^$$' | xargs); \
+		echo "Environment variables loaded successfully"; \
+	else \
+		echo "Error: .env file not found"; \
+		exit 1; \
+	fi
 
 # Start NATS JetStream server
 nats:
@@ -65,31 +73,60 @@ infra: nats valkey
 
 transport: load-env
 	@echo "Starting transport service..."
-	cargo run -p transport-service
+	SERVICE_TYPE=transport cargo run -p meshag-service
 
 t: transport
 
 stt: load-env
 	@echo "Starting STT service..."
-	cargo run -p stt-service
+	SERVICE_TYPE=stt cargo run -p meshag-service
 
 s: stt
 
 llm: load-env
 	@echo "Starting LLM service..."
-	cargo run -p llm-service
+	SERVICE_TYPE=llm cargo run -p meshag-service
 
 l: llm
 
 tts: load-env
 	@echo "Starting TTS service..."
-	cargo run -p tts-service
+	SERVICE_TYPE=tts cargo run -p meshag-service
 
 tt: tts
 
 all: load-env
 	@echo "Starting all services..."
-	cargo run -p transport-service
-	cargo run -p stt-service
-	cargo run -p llm-service
-	cargo run -p tts-service
+	@echo "Note: Use 'make up' to start all services with Docker Compose"
+	@echo "Or run individual services with: make transport, make stt, make llm, make tts"
+
+# Build the unified service
+build-service:
+	@echo "Building unified meshag-service..."
+	cargo build -p meshag-service
+
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	cargo clean
+
+# Show help
+help:
+	@echo "Meshag Service Commands:"
+	@echo "  make up          - Start all services with Docker Compose"
+	@echo "  make infra       - Start NATS and Valkey infrastructure"
+	@echo "  make nats        - Start NATS JetStream server"
+	@echo "  make valkey      - Start Valkey server"
+	@echo "  make transport   - Start transport service (development)"
+	@echo "  make stt         - Start STT service (development)"
+	@echo "  make llm         - Start LLM service (development)"
+	@echo "  make tts         - Start TTS service (development)"
+	@echo "  make build-service - Build unified service binary"
+	@echo "  make clean       - Clean build artifacts"
+	@echo "  make load-env    - Load environment variables from .env"
+	@echo ""
+	@echo "Shortcuts:"
+	@echo "  make t           - Alias for transport"
+	@echo "  make s           - Alias for stt"
+	@echo "  make l           - Alias for llm"
+	@echo "  make tt          - Alias for tts"

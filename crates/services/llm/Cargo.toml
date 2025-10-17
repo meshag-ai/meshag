@@ -1,5 +1,5 @@
 [package]
-name = "llm-service"
+name = "meshag-services-llm"
 version = "0.1.0"
 edition = "2021"
 
@@ -13,11 +13,7 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 
-
 # Meshag crates
-meshag-shared = { path = "../../crates/shared" }
-meshag-connectors = { path = "../../crates/connectors" }
-meshag-service-common = { path = "../../crates/service-common" }
-
-# Service-specific dependencies
-tracing-subscriber = "0.3"
+meshag-shared = { path = "../../shared" }
+meshag-connectors = { path = "../../connectors" }
+meshag-service-common = { path = "../../service-common" }
