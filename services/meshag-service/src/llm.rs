@@ -1,14 +1,12 @@
 use anyhow::Result;
-use llm_service::{LlmService, LlmServiceState};
 use meshag_connectors::{OpenAI, OpenAIConfig};
 use meshag_service_common::server;
+use meshag_services_llm::{LlmService, LlmServiceState};
 use meshag_shared::EventQueue;
 use std::sync::Arc;
 use tracing::info;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+pub async fn run_llm_service() -> Result<()> {
     info!("Starting LLM Service");
 
     let event_queue = EventQueue::new("llm-service").await?;

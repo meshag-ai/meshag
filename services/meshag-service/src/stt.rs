@@ -1,14 +1,12 @@
 use anyhow::Result;
 use meshag_connectors::{Deepgram, DeepgramConfig};
 use meshag_service_common::server;
+use meshag_services_stt::{SttService, SttServiceState};
 use meshag_shared::EventQueue;
 use std::sync::Arc;
-use stt_service::{SttService, SttServiceState};
 use tracing::info;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+pub async fn run_stt_service() -> Result<()> {
     info!("Starting STT Service");
 
     let event_queue = EventQueue::new("stt-service").await?;

@@ -4,10 +4,11 @@ members = [
     "crates/service-common",
     "crates/connectors",
     "crates/orchestrator",
-    "services/stt-service",
-    "services/llm-service",
-    "services/tts-service",
-    "services/transport-service",
+    "crates/services/llm",
+    "crates/services/stt",
+    "crates/services/tts",
+    "crates/services/transport",
+    "services/meshag-service",
 ]
 resolver = "2"
 
@@ -38,7 +39,6 @@ futures-util = "0.3"
 url = "2.4"
 dashmap = "5.5"
 once_cell = "1.19"
-prometheus = "0.13"
 axum-xml-up = "0.2"
 http = "1.1"
 strfmt = "0.2.5"

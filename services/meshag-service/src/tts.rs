@@ -1,14 +1,12 @@
 use anyhow::Result;
 use meshag_connectors::{ElevenLabs, ElevenLabsConfig};
 use meshag_service_common::server;
+use meshag_services_tts::{TtsService, TtsServiceState};
 use meshag_shared::EventQueue;
 use std::sync::Arc;
 use tracing::info;
-use tts_service::{TtsService, TtsServiceState};
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+pub async fn run_tts_service() -> Result<()> {
     info!("Starting TTS Service");
 
     let event_queue = EventQueue::new("tts-service").await?;
