@@ -464,4 +464,4 @@ All pull requests must pass:
 
 ---
 
-**Built with ❤️ using Rust**
+**Built with ❤️ by [abskrj](https://github.com/abskrj)**
