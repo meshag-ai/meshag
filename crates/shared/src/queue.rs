@@ -64,6 +64,8 @@ pub enum StreamType {
     STTStream,
     LLMStream,
     TTSStream,
+    SystemStream,
+    DataStream,
 }
 
 impl StreamType {
@@ -72,6 +74,8 @@ impl StreamType {
             StreamType::STTStream => "STT_STREAM",
             StreamType::LLMStream => "LLM_STREAM",
             StreamType::TTSStream => "TTS_STREAM",
+            StreamType::SystemStream => "SYSTEM_STREAM",
+            StreamType::DataStream => "DATA_STREAM",
         }
     }
 }
@@ -82,6 +86,8 @@ pub enum SubjectName {
     LLMSubject,
     TTSSubject,
     TransportSubject,
+    SystemSubject,
+    DataSubject,
 }
 
 impl SubjectName {
@@ -91,6 +97,8 @@ impl SubjectName {
             SubjectName::LLMSubject => "LLM_SUBJECT.session.{session_id}",
             SubjectName::TTSSubject => "TTS_SUBJECT.session.{session_id}",
             SubjectName::TransportSubject => "TRANSPORT_SUBJECT.session.{session_id}",
+            SubjectName::SystemSubject => "SYSTEM.session.{session_id}",
+            SubjectName::DataSubject => "DATA.session.{session_id}",
         };
 
         match session_id {
@@ -137,6 +145,28 @@ impl StreamConfig {
             max_messages: 100_000,
             max_bytes: 50_000_000,                        // 50MB
             max_age: std::time::Duration::from_secs(600), // 10 minutes
+        }
+    }
+
+    #[must_use]
+    pub fn system_stream() -> Self {
+        Self {
+            name: StreamType::SystemStream.as_str().to_string(),
+            subjects: vec![SubjectName::SystemSubject.as_str(None).to_string()],
+            max_messages: 50_000,
+            max_bytes: 10_000_000,
+            max_age: std::time::Duration::from_secs(60),
+        }
+    }
+
+    #[must_use]
+    pub fn data_stream() -> Self {
+        Self {
+            name: StreamType::DataStream.as_str().to_string(),
+            subjects: vec![SubjectName::DataSubject.as_str(None).to_string()],
+            max_messages: 200_000,
+            max_bytes: 200_000_000,
+            max_age: std::time::Duration::from_secs(600),
         }
     }
 }
@@ -344,6 +374,19 @@ impl EventQueue {
         }
 
         Ok(())
+    }
+
+    pub async fn subscribe(&self, subject: &str) -> Result<async_nats::Subscriber> {
+        Ok(self.client.subscribe(subject.to_string()).await?)
+    }
+
+    pub async fn publish_bytes(&self, subject: &str, bytes: Vec<u8>) -> Result<()> {
+        self.client.publish(subject.to_string(), bytes.into()).await?;
+        Ok(())
+    }
+
+    pub fn client(&self) -> &async_nats::Client {
+        &self.client
     }
 }
 

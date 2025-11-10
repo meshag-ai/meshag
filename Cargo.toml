@@ -9,6 +9,7 @@ members = [
     "crates/services/tts",
     "crates/services/transport",
     "services/meshag-service",
+    "crates/meshag-python",
 ]
 resolver = "2"
 

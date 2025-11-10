@@ -9,6 +9,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
+pub mod multi_session;
+pub use multi_session::MultiSessionLlmService;
+
 pub struct LlmService {
     connectors: Arc<RwLock<HashMap<String, Arc<dyn LlmConnector>>>>,
     default_connector: Arc<RwLock<Option<String>>>,

@@ -52,4 +52,4 @@ temp/
 venv/
 benchmark/
 
-.plan.md
+*.plan.md
