@@ -1,7 +1,7 @@
 # Fast Development Dockerfile (less optimized, faster builds)
 # Use this for quick iterations during development
 
-FROM rust:1.75-bookworm as builder
+FROM rust:1.88-bookworm as builder
 
 WORKDIR /app
 

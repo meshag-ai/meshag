@@ -2,7 +2,7 @@
 # Uses layer caching and minimal runtime image
 
 # Stage 1: Dependencies builder (cached separately)
-FROM rust:1.75-bookworm AS dependency-builder
+FROM rust:1.88-bookworm AS dependency-builder
 
 WORKDIR /app
 
@@ -43,7 +43,7 @@ RUN mkdir -p crates/shared/src \
 RUN cargo build --release --bin meshag-service
 
 # Stage 2: Source builder
-FROM rust:1.75-bookworm AS builder
+FROM rust:1.88-bookworm AS builder
 
 WORKDIR /app
 
