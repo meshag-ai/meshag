@@ -439,12 +439,27 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ### CI/CD Status
 
 ![Tests](https://github.com/meshag-ai/meshag/workflows/Tests/badge.svg)
+![Build and Release](https://github.com/meshag-ai/meshag/workflows/Build%20and%20Release%20Images/badge.svg)
+
+#### Automated Workflows
+
+1. **Tests** (`test.yml`) - Runs automatically on every push/PR
+   - Code formatting check (`cargo fmt`)
+   - Linting (`cargo clippy`)
+   - Unit & integration tests (`cargo test`)
+   - Security audit (`cargo audit`)
+
+2. **Build and Release** (`build-and-release.yml`) - Manual trigger only
+   - Multi-platform Docker builds (amd64, arm64)
+   - Security scanning with Trivy
+   - Push to GitHub Container Registry
+   - Auto-update docker-compose.yml
 
 All pull requests must pass:
-- ✅ Workspace check (`cargo check`)
-- ✅ Unit and integration tests (`cargo test`)
-- ✅ Clippy lints (`cargo clippy`)
 - ✅ Code formatting (`cargo fmt`)
+- ✅ Clippy lints (`cargo clippy`)
+- ✅ Unit and integration tests (`cargo test`)
+- ✅ Security audit (`cargo audit`)
 
 ## 📄 License
 
