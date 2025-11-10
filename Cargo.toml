@@ -9,6 +9,7 @@ members = [
     "crates/services/tts",
     "crates/services/transport",
     "services/meshag-service",
+    "crates/meshag-python",
 ]
 resolver = "2"
 
@@ -28,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 chrono = { version = "0.4", features = ["serde"] }
-async-nats = "0.32"
+async-nats = "0.37"
 async-trait = "0.1"
 tower-http = { version = "0.5.0", features = ["trace", "cors", "fs"] }
 dotenvy = "0.15"

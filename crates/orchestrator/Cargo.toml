@@ -16,3 +16,4 @@ meshag-shared = { path = "../shared" }
 meshag-connectors = { path = "../connectors" }
 chrono = { version = "0.4", features = ["serde"] }
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+futures = "0.3"

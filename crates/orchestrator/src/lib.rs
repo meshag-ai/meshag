@@ -3,11 +3,15 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 pub mod config;
+pub mod pipeline;
 pub mod router;
+pub mod runner;
 pub mod valkey_config;
 
 pub use config::*;
+pub use pipeline::{Pipeline, PipelineBuilder, PrioritizedFrame};
 pub use router::*;
+pub use runner::{Runner, RunnerExecutor, RunnerMetrics, RunnerStatus};
 pub use valkey_config::*;
 
 /// Main orchestrator for the distributed AI agent system

@@ -1,15 +1,18 @@
 use anyhow::Result;
 use meshag_connectors::{OpenAI, OpenAIConfig};
 use meshag_service_common::server;
-use meshag_services_llm::{LlmService, LlmServiceState};
-use meshag_shared::EventQueue;
+use meshag_services_llm::{LlmService, LlmServiceState, MultiSessionLlmService};
+use meshag_shared::{EventQueue, StreamConfig};
 use std::sync::Arc;
 use tracing::info;
 
 pub async fn run_llm_service() -> Result<()> {
-    info!("Starting LLM Service");
+    info!("Starting LLM Service with multi-session support");
 
     let event_queue = EventQueue::new("llm-service").await?;
+
+    event_queue.ensure_stream(StreamConfig::system_stream()).await?;
+    event_queue.ensure_stream(StreamConfig::data_stream()).await?;
 
     let mut llm_service = LlmService::new();
 
@@ -25,21 +28,20 @@ pub async fn run_llm_service() -> Result<()> {
         info!("Registered OpenAI connector");
     }
 
-    let llm_clone = llm_service.clone();
+    let multi_session = MultiSessionLlmService::new(llm_service.clone());
+
     let queue_clone = event_queue.clone();
     tokio::spawn(async move {
-        if let Err(e) = llm_clone.start_processing(queue_clone).await {
-            tracing::error!("LLM processing failed: {}", e);
+        if let Err(e) = multi_session.start_dispatcher(queue_clone).await {
+            tracing::error!("Multi-session LLM dispatcher failed: {}", e);
         }
     });
 
-    // Create service state for HTTP handlers
     let state = Arc::new(LlmServiceState {
         event_queue,
         llm_service,
     });
 
-    // Start HTTP server for health checks and metrics
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "8082".to_string())
         .parse()?;

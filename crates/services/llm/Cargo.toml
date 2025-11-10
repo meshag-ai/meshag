@@ -17,3 +17,7 @@ chrono = { workspace = true }
 meshag-shared = { path = "../../shared" }
 meshag-connectors = { path = "../../connectors" }
 meshag-service-common = { path = "../../service-common" }
+
+dashmap = "5.5"
+tokio-util = "0.7"
+futures = "0.3"

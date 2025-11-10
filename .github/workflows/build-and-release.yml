@@ -1,14 +1,10 @@
 name: Build and Release Images
 
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
-      build_all:
-        description: "Build all services"
+      push_to_registry:
+        description: "Push images to registry"
         required: false
         default: true
         type: boolean
@@ -49,7 +45,6 @@ jobs:
   build-service:
     needs: detect-changes
     runs-on: ubuntu-latest
-    if: needs.detect-changes.outputs.services-changed == 'true' || github.event.inputs.build_all == 'true'
     strategy:
       matrix:
         platform: [linux/amd64, linux/arm64]
@@ -65,7 +60,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Container Registry
-        if: github.event_name != 'pull_request'
+        if: github.event.inputs.push_to_registry == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -83,7 +78,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            type=sha,prefix={{branch}}-
+            type=sha,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=${{ needs.detect-changes.outputs.version }}
 
@@ -93,7 +88,7 @@ jobs:
         with:
           context: .
           file: ./docker/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event.inputs.push_to_registry == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=meshag-service-${{ matrix.platform }}
@@ -101,14 +96,14 @@ jobs:
           platforms: ${{ matrix.platform }}
 
       - name: Output service image digest
-        if: github.event_name != 'pull_request'
+        if: github.event.inputs.push_to_registry == 'true'
         run: |
           echo "Unified service image digest: ${{ steps.build-service.outputs.digest }}"
 
   security-scan:
     needs: [detect-changes, build-service]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (needs.detect-changes.outputs.services-changed == 'true' || github.event.inputs.build_all == 'true')
+    if: github.event.inputs.push_to_registry == 'true'
     permissions:
       contents: read
       packages: read
@@ -131,7 +126,7 @@ jobs:
   update-docker-compose:
     needs: [detect-changes, build-service]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && (needs.detect-changes.outputs.services-changed == 'true' || github.event.inputs.build_all == 'true')
+    if: github.event.inputs.push_to_registry == 'true'
     permissions:
       contents: write
 
