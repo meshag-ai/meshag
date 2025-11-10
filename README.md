@@ -436,6 +436,16 @@ queue.push(PrioritizedFrame { priority: 2, frame: data_frame });
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+### CI/CD Status
+
+![Tests](https://github.com/meshag-ai/meshag/workflows/Tests/badge.svg)
+
+All pull requests must pass:
+- ✅ Workspace check (`cargo check`)
+- ✅ Unit and integration tests (`cargo test`)
+- ✅ Clippy lints (`cargo clippy`)
+- ✅ Code formatting (`cargo fmt`)
+
 ## 📄 License
 
 [Your License Here]
