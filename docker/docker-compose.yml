@@ -1,203 +1,84 @@
+version: '3.8'
+
 services:
-  # NATS JetStream - High-performance message streaming
   nats:
     image: nats:2.10-alpine
-    container_name: meshag-nats
     ports:
-      - "4222:4222" # Client connections
+      - "4222:4222"
       - "8222:8222" # HTTP monitoring
-      - "6222:6222" # Routing port for clustering
-    command:
-      - "--jetstream"
-      - "--store_dir=/data"
-      - "--http_port=8222"
-    volumes:
-      - nats_data:/data
+    command: [ "-js", "-m", "8222" ]
     healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "--quiet",
-          "--tries=1",
-          "--spider",
-          "http://localhost:8222/healthz",
-        ]
-      interval: 10s
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz" ]
+      interval: 5s
       timeout: 3s
-      retries: 3
-      start_period: 5s
-    restart: unless-stopped
-    networks:
-      - meshag-network
-
-  # Valkey - Redis-compatible key-value store for configuration
-  valkey:
-    image: valkey/valkey:7.2-alpine
-    container_name: meshag-valkey
-    ports:
-      - "6379:6379"
-    volumes:
-      - valkey_data:/data
-    command: valkey-server --appendonly yes
-    healthcheck:
-      test: ["CMD", "valkey-cli", "ping"]
-      interval: 10s
-      timeout: 5s
       retries: 5
-      start_period: 10s
-    restart: unless-stopped
     networks:
       - meshag-network
 
-  # STT Service - Speech-to-Text with configurable providers
-  stt-service:
+  gateway:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: meshag-stt-service
-    ports:
-      - "8081:8081"
-    environment:
-      - SERVICE_TYPE=stt
-      - RUST_LOG=${RUST_LOG:-info}
-      - PORT=8081
-      - NATS_URL=nats://nats:4222
-      - VALKEY_URL=redis://valkey:6379
-      # OpenAI Whisper (Default)
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      # Deepgram (Optional)
-      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY:-}
-    depends_on:
-      nats:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-    networks:
-      - meshag-network
-
-  # LLM Service - Language Model with configurable providers
-  llm-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: meshag-llm-service
-    ports:
-      - "8082:8082"
-    environment:
-      - SERVICE_TYPE=llm
-      - RUST_LOG=${RUST_LOG:-info}
-      - PORT=8082
-      - NATS_URL=nats://nats:4222
-      - VALKEY_URL=redis://valkey:6379
-      # OpenAI GPT (Default)
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      # Anthropic Claude (Optional)
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-    depends_on:
-      nats:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-    networks:
-      - meshag-network
-
-  # TTS Service - Text-to-Speech with configurable providers
-  tts-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: meshag-tts-service
-    ports:
-      - "8083:8083"
-    environment:
-      - SERVICE_TYPE=tts
-      - RUST_LOG=${RUST_LOG:-info}
-      - PORT=8083
-      - NATS_URL=nats://nats:4222
-      - VALKEY_URL=redis://valkey:6379
-      # ElevenLabs (Default)
-      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY:-}
-      # Azure Speech (Optional)
-      - AZURE_SPEECH_KEY=${AZURE_SPEECH_KEY:-}
-      - AZURE_SPEECH_REGION=${AZURE_SPEECH_REGION:-}
-    depends_on:
-      nats:
-        condition: service_healthy
-      valkey:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    restart: unless-stopped
-    networks:
-      - meshag-network
-
-  # Transport Service - WebRTC transport with Daily.co
-  transport-service:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    container_name: transport-service
     ports:
       - "8080:8080"
     environment:
-      - SERVICE_TYPE=transport
-      - RUST_LOG=${RUST_LOG:-info}
+      - SERVICE_TYPE=gateway
       - PORT=8080
       - NATS_URL=nats://nats:4222
-      - VALKEY_URL=redis://valkey:6379
-      # Daily.co Configuration (Required)
-      - DAILY_API_KEY=${DAILY_API_KEY:-}
-      - DAILY_DOMAIN=${DAILY_DOMAIN:-}
-      # Twilio Configuration (Optional)
-      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID:-}
-      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN:-}
-      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER:-}
-      - TWILIO_WEBHOOK_URL=${TWILIO_WEBHOOK_URL:-}
     depends_on:
       nats:
         condition: service_healthy
-      valkey:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
     restart: unless-stopped
     networks:
       - meshag-network
 
-# Networks
+  llm:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      - SERVICE_TYPE=llm
+      - NATS_URL=nats://nats:4222
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-4}
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - meshag-network
+
+  stt:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      - SERVICE_TYPE=stt
+      - NATS_URL=nats://nats:4222
+      - DEEPGRAM_API_KEY=${DEEPGRAM_API_KEY}
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - meshag-network
+
+  tts:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    environment:
+      - SERVICE_TYPE=tts
+      - NATS_URL=nats://nats:4222
+      - ELEVENLABS_API_KEY=${ELEVENLABS_API_KEY}
+    depends_on:
+      nats:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - meshag-network
+
 networks:
   meshag-network:
     driver: bridge
-    name: meshag-network
-
-# Volumes
-volumes:
-  nats_data:
-    driver: local
-  valkey_data:
-    driver: local

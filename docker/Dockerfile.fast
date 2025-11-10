@@ -1,0 +1,35 @@
+# Fast Development Dockerfile (less optimized, faster builds)
+# Use this for quick iterations during development
+
+FROM rust:1.75-bookworm as builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy all source
+COPY . .
+
+# Build with fewer optimizations for faster compile
+RUN cargo build --release --bin meshag-service
+
+# Runtime image
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/target/release/meshag-service /usr/local/bin/meshag-service
+
+ENV SERVICE_TYPE=gateway
+ENV PORT=8080
+
+EXPOSE 8080 8081 8082 8083
+
+CMD ["meshag-service"]
