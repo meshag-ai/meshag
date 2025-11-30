@@ -16,6 +16,7 @@ pub use providers::{
     daily::{Daily, DailyConfig},
     deepgram::{Deepgram, DeepgramConfig},
     elevenlabs::{ElevenLabs, ElevenLabsConfig},
+    gemini::{Gemini, GeminiConfig},
     openai::{OpenAI, OpenAIConfig},
     twilio::{twilio_transport_connector, TwilioConfig, TwilioTransportConnector},
 };
