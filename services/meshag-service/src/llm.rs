@@ -1,5 +1,5 @@
 use anyhow::Result;
-use meshag_connectors::{OpenAI, OpenAIConfig};
+use meshag_connectors::{Gemini, GeminiConfig, OpenAI, OpenAIConfig};
 use meshag_service_common::server;
 use meshag_services_llm::{LlmService, LlmServiceState, MultiSessionLlmService};
 use meshag_shared::{EventQueue, StreamConfig};
@@ -26,6 +26,21 @@ pub async fn run_llm_service() -> Result<()> {
             .register_connector("openai", openai_connector)
             .await;
         info!("Registered OpenAI connector");
+    }
+
+    if let Ok(api_key) = std::env::var("GEMINI_API_KEY") {
+        let mut config = GeminiConfig::new(api_key);
+        if let Ok(base_url) = std::env::var("GEMINI_BASE_URL") {
+            config = config.with_base_url(base_url);
+        }
+        if let Ok(model) = std::env::var("GEMINI_MODEL") {
+            config = config.with_llm_model(model);
+        }
+        let gemini_connector = Gemini::llm_connector(config);
+        llm_service
+            .register_connector("gemini", gemini_connector)
+            .await;
+        info!("Registered Gemini connector");
     }
 
     let multi_session = MultiSessionLlmService::new(llm_service.clone());
